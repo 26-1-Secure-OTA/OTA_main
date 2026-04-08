@@ -5,12 +5,15 @@ from urllib.parse import urljoin
 from pathlib import Path
 import os, shutil, json, subprocess
 import requests
-from utils.fastcdc_chunking import join_all_by_manifest
-from utils.fastcdc_chunking import load_image_from_oci
-from utils.fastcdc_chunking import load_image_from_tar
-from utils.fastcdc_chunking import run_container
+import hashlib
+import re
+import time
+#from utils.fastcdc_chunking import join_all_by_manifest
+#from utils.fastcdc_chunking import load_image_from_oci
+#from utils.fastcdc_chunking import load_image_from_tar
+#from utils.fastcdc_chunking import run_container
 from make_vvm import load_or_create_ed25519_private_key, calc_ed25519_keyid_from_public_key, sign_block_ed25519
-from utils.metrics import measure
+#from utils.metrics import measure
 from .storage import Storage
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,6 +23,15 @@ from urllib3.util.retry import Retry
 SYSTEM = os.environ.get("SYSTEM_NAME", "")
 TC = os.environ.get("TEST_CASE", "")
 
+_HEX64_RE = re.compile(r"(?i)\b[a-f0-9]{64}\b")
+
+def _expected_sha256_from_chunk_name(s: str) -> str:
+    m = _HEX64_RE.search(s)
+    if not m:
+        raise ValueError(f"cannot extract sha256 from chunk name: {s}")
+    return m.group(0).lower()
+
+
 @dataclass
 class InstallResult:
     ok: bool
@@ -28,6 +40,40 @@ class InstallResult:
 class Installer:
     def __init__(self, storage: Storage):
         self.storage = storage
+
+    def load_image_from_tar(self, tar_path: str) -> str:
+        result = subprocess.run(
+            ["podman", "load", "-i", tar_path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        print(output.strip())
+
+        # 예: "Loaded image(s): localhost/ivi:2.0.0"
+        m = re.search(r"Loaded image(?:\(s\))?:\s*(.+)", output)
+        if not m:
+            raise RuntimeError(f"podman load output에서 이미지 이름을 찾지 못했습니다: {output}")
+
+        image_ref = m.group(1).strip()
+        return image_ref
+
+
+    def run_container(self, image_ref: str, container_name: str = "ivi-test") -> None:
+        # 기존 컨테이너 있으면 삭제
+        subprocess.run(["podman", "rm", "-f", container_name], check=False)
+
+        # 일단 백그라운드 실행
+        subprocess.run(
+            ["podman", "run", "-d", "--name", container_name, image_ref],
+            check=True,
+        )
+
+        print(f"[Primary ECU] Container started: {container_name} ({image_ref})")
+
+        
 
     def _make_session(self) -> requests.Session:
         s = requests.Session()
@@ -45,24 +91,54 @@ class Installer:
         s.mount("http://", adapter)
         s.mount("https://", adapter)
         return s
+    
 
     def _download_one_chunk(self, session: requests.Session, url: str, out_path: str) -> None:
-        # 이미 있으면 스킵(캐시)
+        # 이미 있으면 스킵(캐시) - 기존 파일 해시 검증은 안 함
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             return
 
         tmp_path = out_path + ".part"
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-        with session.get(url, stream=True, verify=False, timeout=(5, 120)) as r:
-            r.raise_for_status()
-            with open(tmp_path, "wb") as f:
-                # 8KB는 너무 작아서 오버헤드 큼 → 1MB로 키우는 게 체감 큼
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
+        # expected sha256: 청크 이름(또는 경로)에서 64hex 추출
+        # (out_path에 chunk_name이 포함되므로 여기서 뽑는 게 안전)
+        chunk_file_name = _expected_sha256_from_chunk_name(os.path.basename(out_path))
 
-        os.replace(tmp_path, out_path)
+
+        h = hashlib.sha256()
+
+        try:
+            with session.get(url, stream=True, verify=False, timeout=(5, 120)) as r:
+                r.raise_for_status()
+                with open(tmp_path, "wb") as f:
+                    for data in r.iter_content(chunk_size=1024 * 1024):
+                        if not data:
+                            continue
+                        h.update(data)   # ✅ 다운로드 중 해시 업데이트
+                        f.write(data)
+
+            got = h.hexdigest()
+            if got != chunk_file_name:
+                # ✅ mismatch면 파일 확정 금지 + 임시 파일 삭제
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                raise RuntimeError(f"chunk hash mismatch: chunk_file_name={chunk_file_name} got={got} url={url}")
+
+            # ✅ 검증 통과 시에만 최종 파일로 확정
+            os.replace(tmp_path, out_path)
+
+        except Exception:
+            # ✅ 실패 시 .part가 남지 않게 정리
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+
 
     def build_image_manifest_url(self, base_url, ecu, image_name):
         filename = f"{image_name}.json"
@@ -150,7 +226,7 @@ class Installer:
 
                         # 진행률 로그(원하시면)
                         if i % 50 == 0 or i == len(futures):
-                            print(f"[Primary ECU] downloaded {i}/{len(futures)} chunks (workers={max_workers})")
+                            print(f"[Primary ECU] chunk 다운로드 및 해시 무결성 검사 진행 {i}/{len(futures)} chunks (workers={max_workers})")
 
             # 재조립
             with measure("Reassemble chunks", system_name=SYSTEM, test_case=TC):
@@ -252,35 +328,36 @@ class Installer:
             return []
 
     def download_image(self, update_images:List, base_url:str):
-        with measure("Download Images", system_name=SYSTEM, test_case=TC):
-            for image in update_images:
-                image_name = image["images"]["image_name"]
-                image_path = f"{base_url}/images/{image_name}.tar"
-                out_path = f"./downloads/image_storage/{image_name}.tar"
+        #with measure("Download Images", system_name=SYSTEM, test_case=TC):
+        for image in update_images:
+            image_name = image["images"]["image_name"]
+            image_path = f"{base_url}/images/{image_name}.tar"
+            out_path = f"./downloads/image_storage/{image_name}.tar"
 
-                print(f"[Primary ECU] GET:      {image_path}")
+            print(f"[Primary ECU] GET:      {image_path}")
 
-                try:
-                    with requests.get(image_path, stream=True, verify=False) as response:
-                        response.raise_for_status()
-                        with open(out_path, "wb") as f:
-                            for image in response.iter_content(chunk_size=8192):
-                                if image:
-                                    f.write(image)
-                    print(f"[OK] saved image -> {out_path}")
-                except Exception as e:
-                    print(f"[FAIL] failed to download chunk {image_name} from {image_path}: {e}")
+            try:
+                with requests.get(image_path, stream=True, verify=False) as response:
+                    response.raise_for_status()
+                    with open(out_path, "wb") as f:
+                        for image in response.iter_content(chunk_size=8192):
+                            if image:
+                                f.write(image)
+                print(f"[OK] saved image -> {out_path}")
+            except Exception as e:
+                print(f"[FAIL] failed to download chunk {image_name} from {image_path}: {e}")
 
-        with measure("Build container image", system_name=SYSTEM, test_case=TC):
-            load_image_from_tar(out_path)
+        #with measure("Build container image", system_name=SYSTEM, test_case=TC):
+            image_ref = self.load_image_from_tar(out_path)
+            self.run_container(image_ref, container_name=f"{image_name}-ctr")
 
-        version = image_name.split('_')[1]
-        major, minor, patch = map(int, version.split('.'))
-        if major == 3:
-            major = 0
-        else:
-            major -= 1
-        version = f"{major}.{minor}.{patch}"
+            version = image_name.split('_')[1]
+            major, minor, patch = map(int, version.split('.'))
+            if major == 3:
+                major = 0
+            else:
+                major -= 1
+            version = f"{major}.{minor}.{patch}"
         # run_container(version)
 
     def update_info(self, layer_list, vvm_version):

@@ -2,21 +2,21 @@
   "signatures": [
     {
       "keyid": "507b54e2b4b3606dd011a9455f9fbc043b8cb71d9601e9b8d449aafab48bf10d",
-      "sig": "5acca6d41571b6078a9a196194c22232b89622af1eb773fce68bc151de8d241ff2e09d2b58469fd865d116d3d3e9fd307f0e2a078fe03410f0b59a7d347fc60d"
+      "sig": "b00d4a92fd94ba95d443fe9d3a73ccef90e5ec3fe1a7e53759905f4592628dd8ecc7e1676e6d8012b1240dcb5ea1f48377942e05a0b3678c388910a20070040d"
     }
   ],
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 22,
-    "expires": "2026-12-01T08:26:39Z",
+    "version": 8,
+    "expires": "2027-04-03T10:48:30Z",
     "targets": {
-      "ivi_2.0.0": {
+      "ivi_3.0.1": {
         "hashes": {
-          "sha256": "5b357d7f26afcee2ea354cdd8f813cd86f0291fa5e75f54db9f78c583235f6f7",
-          "sha512": "c026f0cd88496c7d3989fb78d7af0a4b01690d795da8c8609568547f7f2824e1db98e45ac2e356219378e96ed1aaf421299a1d0c1f4c91373b13383374febcf1"
+          "sha256": "f8cd42cc815da93c1330088bf031675dcc646cab4c5bef43bb4046260c503570",
+          "sha512": "e1b0fba3c0e858ec1a0e29ac0aed6eae82cfd6b2bdb4ed5e588c69de8171364eaa633c61359a1caa351c76a77f51cc619c3f433086e05e60c937e8be0d0c4cb4"
         },
-        "length": 501955584
+        "length": 901620224
       }
     },
     "delegations": {

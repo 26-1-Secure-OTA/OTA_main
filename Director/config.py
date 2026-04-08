@@ -9,13 +9,13 @@ DIRECTOR_METADATA_DIR = (ROOT / "meta").resolve()
 DIRECTOR_KEYS_DIR     = (ROOT / "keys").resolve()
 
 # --- MQTT (mTLS) ---
-MQTT_BROKER = "10.30.101.15"
+MQTT_BROKER = "172.20.10.2"
 MQTT_PORT   = 8883
 
 # cert/key는 프로젝트 구조: Director/src/utils/certs/...
 MQTT_CA   = "./src/utils/certs/ca.crt"
-MQTT_CERT = "./src/utils/certs/director.crt"
-MQTT_KEY  = "./src/utils/certs/director.key"
+MQTT_CERT = "./src/utils/certs/mqtt_client.crt"
+MQTT_KEY  = "./src/utils/certs/mqtt_client.key"
 
 # --- Topics ---
 TOPIC_VVM    = "primary/version"

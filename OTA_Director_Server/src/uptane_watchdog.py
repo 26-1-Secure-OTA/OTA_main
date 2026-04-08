@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.backends import default_backend
 
-from utils.fastcdc_chunking import ensure_dirs, split_all, CHUNKS_DIR
+#from utils.fastcdc_chunking import ensure_dirs, split_all, CHUNKS_DIR
 
 #==========================================================================================================================
 #==========================================================================================================================
@@ -49,6 +49,11 @@ TARGETS_PRIV_PATH = os.path.join(KEY_ROOT, "targets.pem")
 
 #==========================================================================================================================
 #==========================================================================================================================
+
+def ensure_dirs(*paths: str) -> None:
+    for p in paths:
+        if p:
+            os.makedirs(p, exist_ok=True)
 
 def canonical_json_bytes(obj: Any) -> bytes:
     return json.dumps(
