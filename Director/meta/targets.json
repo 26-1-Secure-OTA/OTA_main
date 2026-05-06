@@ -2,49 +2,26 @@
   "signatures": [
     {
       "keyid": "507b54e2b4b3606dd011a9455f9fbc043b8cb71d9601e9b8d449aafab48bf10d",
-      "sig": "b00d4a92fd94ba95d443fe9d3a73ccef90e5ec3fe1a7e53759905f4592628dd8ecc7e1676e6d8012b1240dcb5ea1f48377942e05a0b3678c388910a20070040d"
+      "sig": "b4211c53dfa59f3821740431c472eb9b0e11848ade333648c3df22aba1e0c194fcd292714fc992452ebbbea9b78d3abb2a9b1e9b3a1b3077c3b15b5ef4b46c0b"
     }
   ],
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 8,
-    "expires": "2027-04-03T10:48:30Z",
+    "version": 2,
+    "expires": "2027-05-06T11:42:06Z",
     "targets": {
-      "ivi_3.0.1": {
+      "ivi_3.0.0": {
         "hashes": {
-          "sha256": "f8cd42cc815da93c1330088bf031675dcc646cab4c5bef43bb4046260c503570",
-          "sha512": "e1b0fba3c0e858ec1a0e29ac0aed6eae82cfd6b2bdb4ed5e588c69de8171364eaa633c61359a1caa351c76a77f51cc619c3f433086e05e60c937e8be0d0c4cb4"
+          "sha256": "509ecea57b315325cfb926cef513f3ae3e3d21ba4ac1de626ded73d54b9f2ce7",
+          "sha512": "260df2f8c4c2e28dcdefb7e83a179bede30d252f71b1df4249d28eb64a16e4125293c09b4cc922f33867e57c549cb4175775c9d17b3b5efb92621d4fc290e566"
         },
-        "length": 901620224
+        "length": 902191104
       }
     },
     "delegations": {
-      "keys": {
-        "f446fb01473aa70d7fbe1a954da9fe412b73bd792f8ce478eb9ec3acbe7f529c": {
-          "keytype": "ed25519",
-          "scheme": "ed25519",
-          "keyid_hash_algorithms": [
-            "sha256"
-          ],
-          "keyval": {
-            "public": "46c9ebaabb47c7562f9d905386bbb756f4a6e0dc6ffb82e40bc19fa77e4e76d9"
-          }
-        }
-      },
-      "roles": [
-        {
-          "name": "ivi",
-          "keyids": [
-            "f446fb01473aa70d7fbe1a954da9fe412b73bd792f8ce478eb9ec3acbe7f529c"
-          ],
-          "paths": [
-            "ivi/*"
-          ],
-          "terminating": false,
-          "threshold": 1
-        }
-      ]
+      "keys": {},
+      "roles": []
     }
   }
 }
