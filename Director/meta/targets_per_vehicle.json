@@ -2,13 +2,13 @@
   "signatures": [
     {
       "keyid": "507b54e2b4b3606dd011a9455f9fbc043b8cb71d9601e9b8d449aafab48bf10d",
-      "sig": "534687c270a34dc9b8947b5a7c88e5d1a01e075f7bc1ab11d0da0595ceea8d838053bdcbeefe3aa2744b6eddce25a1eb7a5a06867f6ee48f30fcbe9bc545820e"
+      "sig": "d6969812f3fb7a112f52d1c734f6450302ba3a9755c23a929dca443738dba7f7ebb5209c6d015c48afa610e43cf365c3523748ddb533fd1c225e551045330a0a"
     }
   ],
   "signed": {
     "_type": "targets",
     "version": 1,
-    "expires": "2026-05-20T11:42:07Z",
+    "expires": "2026-05-31T08:27:53Z",
     "targets": [
       {
         "ecu": "ivi",
@@ -20,6 +20,19 @@
               "sha512": "260df2f8c4c2e28dcdefb7e83a179bede30d252f71b1df4249d28eb64a16e4125293c09b4cc922f33867e57c549cb4175775c9d17b3b5efb92621d4fc290e566"
             },
             "length": 902191104
+          }
+        }
+      },
+      {
+        "ecu": "stm32-led-001",
+        "images": {
+          "image_name": "stm32-led-001_1.0.2",
+          "image_info": {
+            "hashes": {
+              "sha256": "2d471ddd5ed572067702062642c4bad8f18522960085bb222767383084729cda",
+              "sha512": "f3ce20ad39028990fa69b5fd47760e3832415adc52b7ccd094d411096f4a2911fa21e7a23b80e0fdfb0e6407857593a15451f6354d05e235ee13e53a357c9fa1"
+            },
+            "length": 86
           }
         }
       }

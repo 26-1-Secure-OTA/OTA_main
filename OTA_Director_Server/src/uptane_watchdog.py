@@ -77,26 +77,29 @@ def hashlib_sha256_hex(b: bytes) -> str:
     return h.hexdigest()
 
 
-def parse_image_name_version(path: str):
+def parse_artifact_name_version(path: str):
     """
-    {ecu}_{X.Y.Z}.tar 형식의 파일명에서
-      ecu, version, stem(ecu_version)을 추출.
-    예) ivi_1.0.0.tar -> ("ivi", "1.0.0", "ivi_1.0.0")
+    {ecu}_{X.Y.Z}.tar 또는 {ecu}_{X.Y.Z}.cfg 형식의 파일명에서
+      ecu, version, stem, ext를 추출.
+    예)
+      ivi_1.0.0.tar -> ("ivi", "1.0.0", "ivi_1.0.0", ".tar")
+      stm32-led-001_1.0.1.cfg -> ("stm32-led-001", "1.0.1", "stm32-led-001_1.0.1", ".cfg")
     """
     fname = os.path.basename(path)
-    if not fname.endswith(".tar"):
-        raise ValueError(f"지원하지 않는 이미지 파일명: {fname}")
+    stem, ext = os.path.splitext(fname)
 
-    stem = fname[:-4]  # .tar 제거
+    if ext not in (".tar", ".cfg"):
+        raise ValueError(f"지원하지 않는 업데이트 파일명: {fname}")
+
     m = re.match(r"^(?P<ecu>.+?)_(?P<ver>\d+(?:\.\d+)*)$", stem)
     if not m:
         raise ValueError(f"이름/버전 파싱 실패: {stem}")
 
     ecu = m.group("ecu")
     ver = m.group("ver")
-    image_stem = f"{ecu}_{ver}"
-    return ecu, ver, image_stem
+    artifact_stem = f"{ecu}_{ver}"
 
+    return ecu, ver, artifact_stem, ext
 
 def load_json_if_exists(path: str) -> Optional[dict]:
     if not os.path.exists(path):
@@ -462,12 +465,8 @@ class FileChangeHandler(FileSystemEventHandler):
 
         image_path = event.src_path
         # 0) tar 형식의 파일 업로드 확인하여 대상 ECU 및 버전 확인
-        if not image_path.endswith(".tar"):
-            print(f"[watchdog] 무시 (tar 아님): {image_path}")
-            return
-
         try:
-            ecu, image_ver, image_stem = parse_image_name_version(image_path)
+            ecu, image_ver, image_stem, ext = parse_artifact_name_version(image_path)
         except ValueError as e:
             print(f"[watchdog] 파일명 파싱 실패: {e}")
             return
@@ -522,8 +521,10 @@ class FileChangeHandler(FileSystemEventHandler):
 
         # 업데이트 이미지 Image_Repo/image_storage로 복사
         src = image_path
-        dst = os.path.join(self.image_dir_remote, f"{image_stem}.tar")
+        dst = os.path.join(self.image_dir_remote, f"{image_stem}{ext}")
         shutil.copy2(src, dst)
+
+        print(f"[watchdog] artifact copied: {dst}")
 
 
 

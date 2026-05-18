@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from importlib.resources import path
+from importlib.resources import path
 from typing import Optional, Union, Dict, Any, List
 from urllib.parse import urljoin
 from pathlib import Path
@@ -40,6 +42,7 @@ class InstallResult:
 class Installer:
     def __init__(self, storage: Storage):
         self.storage = storage
+    
 
     def load_image_from_tar(self, tar_path: str) -> str:
         result = subprocess.run(
@@ -430,3 +433,139 @@ class Installer:
         active = self.storage.active_symlink()
         if os.path.islink(active): os.unlink(active)
         os.symlink(self.storage.staging_dir(prev), active)
+    
+    def _sha256_file(self, path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                if chunk:
+                    h.update(chunk)
+        return h.hexdigest()
+
+
+    def _sha512_file(self, path: str) -> str:
+        h = hashlib.sha512()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                if chunk:
+                    h.update(chunk)
+        return h.hexdigest()
+
+
+    def _parse_cfg_text(self, cfg_text: str) -> dict:
+        cfg = {}
+
+        for line in cfg_text.splitlines():
+            line = line.strip()
+
+            if not line or line.startswith("#"):
+                continue
+
+            if "=" not in line:
+                continue
+
+            k, v = line.split("=", 1)
+            cfg[k.strip()] = v.strip()
+
+        return cfg
+
+
+    def download_config_to_secondary(self, update_images: List, base_url: str) -> dict:
+        from .secondary_serial import SecondarySerial
+
+        os.makedirs("./downloads/config_storage", exist_ok=True)
+
+        results = []
+
+        secondary = SecondarySerial()
+
+        try:
+            for item in update_images:
+                ecu_serial = item["ecu"]
+                image_name = item["images"]["image_name"]
+                image_info = item["images"]["image_info"]
+
+                expected_sha256 = image_info["hashes"]["sha256"]
+                expected_sha512 = image_info["hashes"]["sha512"]
+                expected_length = image_info.get("length")
+
+                filename = f"{image_name}.cfg"
+                cfg_url = f"{base_url}/images/{filename}"
+                out_path = f"./downloads/config_storage/{filename}"
+
+                print(f"[Primary ECU] GET CONFIG: {cfg_url}")
+
+                with requests.get(cfg_url, stream=True, verify=False, timeout=10) as response:
+                    response.raise_for_status()
+                    with open(out_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+
+                actual_length = os.path.getsize(out_path)
+                actual_sha256 = self._sha256_file(out_path)
+                actual_sha512 = self._sha512_file(out_path)
+
+                if expected_length is not None and actual_length != expected_length:
+                    raise RuntimeError(
+                        f"length mismatch: expected={expected_length}, actual={actual_length}"
+                    )
+
+                if actual_sha256 != expected_sha256:
+                    raise RuntimeError(
+                        f"sha256 mismatch: expected={expected_sha256}, actual={actual_sha256}"
+                    )
+
+                if actual_sha512 != expected_sha512:
+                    raise RuntimeError(
+                        f"sha512 mismatch: expected={expected_sha512}, actual={actual_sha512}"
+                    )
+
+                cfg_text = Path(out_path).read_text(encoding="utf-8")
+                cfg = self._parse_cfg_text(cfg_text)
+
+                target_ecu = cfg.get("TARGET_ECU")
+                version = cfg.get("VERSION")
+                led_mode = cfg.get("LED_MODE")
+
+                if target_ecu != ecu_serial:
+                    raise RuntimeError(
+                        f"TARGET_ECU mismatch: metadata={ecu_serial}, cfg={target_ecu}"
+                    )
+
+                if led_mode not in ("ON", "OFF", "BLINK"):
+                    raise RuntimeError(f"invalid LED_MODE: {led_mode}")
+
+                print("[Primary ECU] Send config to Secondary")
+                result_resp = secondary.send_config(cfg_text)
+                print(f"[Secondary]\n{result_resp}")
+
+                status_resp = secondary.get_status()
+                print(f"[Secondary STATUS]\n{status_resp}")
+
+                ok = "RESULT OK" in result_resp
+
+                results.append({
+                    "ecu_serial": ecu_serial,
+                    "target_version": version,
+                    "artifact": filename,
+                    "led_mode": led_mode,
+                    "status": "OK" if ok else "FAIL",
+                    "secondary_result": result_resp,
+                    "secondary_status": status_resp,
+                })
+
+        except Exception as e:
+            print(f"[FAIL] secondary config update failed: {e}")
+            results.append({
+                "status": "FAIL",
+                "reason": str(e),
+            })
+
+        finally:
+            secondary.close()
+
+        return {
+            "ok": all(r.get("status") == "OK" for r in results),
+            "results": results,
+        }
