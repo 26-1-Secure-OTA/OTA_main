@@ -25,6 +25,7 @@ from cryptography.hazmat.backends import default_backend
 ROOT_DIR   = '../src_add'
 WATCH_DIR  = os.path.join(ROOT_DIR, 'stage')  # 업데이트 이미지 업로드 위치
 UPDATE_DIR = os.path.join(ROOT_DIR, "update_dir")
+REJECT_DIR = os.path.join(ROOT_DIR, "rejected")
 
 # Image, Director 쪽 기본 경로
 IMAGE_REPO_DEFAULT    = '../Image_Repo'
@@ -308,6 +309,36 @@ def _version_gt(a: str, b: str) -> bool:
             return False
     return False
 
+def should_accept_new_target(parent_targets_path: str, target_name: str) -> tuple[bool, str]:
+    """
+    같은 ECU 이름의 기존 target과 비교해서,
+    새 target이 기존보다 낮거나 같은 버전이면 거부한다.
+    """
+    obj = load_json_if_exists(parent_targets_path)
+    if obj is None:
+        return True, "no existing targets"
+
+    signed = obj.get("signed", {})
+    targets = signed.get("targets", {})
+
+    new_name, new_ver = _parse_target_name_ver(target_name)
+    if not new_name or not new_ver:
+        return False, f"invalid target name: {target_name}"
+
+    for existing in targets.keys():
+        old_name, old_ver = _parse_target_name_ver(existing)
+
+        if old_name != new_name or not old_ver:
+            continue
+
+        if _version_gt(old_ver, new_ver):
+            return False, f"낮은 버전 업데이트 시도 차단: 기존 최신={existing}, 업로드={target_name}"
+
+        if old_ver == new_ver:
+            return False, f"동일 버전 업데이트 시도 차단: 기존={existing}, 업로드={target_name}"
+
+    return True, "accepted"
+
 def update_parent_targets(parent_targets_path: str,
                           target_name: str,
                           image_path: str,
@@ -475,6 +506,23 @@ class FileChangeHandler(FileSystemEventHandler):
 
         print(f"[watchdog] 새 이미지 감지: {image_path}")
         print(f"[watchdog] ECU={ecu}, version={image_ver}")
+
+        ok, reason = should_accept_new_target(self.parent_targets_json, target_name)
+
+        if not ok:
+            print(f"[watchdog] 업데이트 거부: {reason}")
+
+            ensure_dirs(REJECT_DIR)
+
+            reject_path = os.path.join(REJECT_DIR, os.path.basename(image_path))
+
+            try:
+                shutil.move(image_path, reject_path)
+                print(f"[watchdog] 거부된 업데이트 파일 이동: {reject_path}")
+            except Exception as e:
+                print(f"[watchdog] 거부된 업데이트 파일 이동 실패: {e}")
+
+            return
 
         ensure_dirs(UPDATE_DIR, self.image_dir_remote)
 
