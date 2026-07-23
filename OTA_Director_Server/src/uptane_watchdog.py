@@ -80,7 +80,7 @@ def hashlib_sha256_hex(b: bytes) -> str:
 
 def parse_artifact_name_version(path: str):
     """
-    {ecu}_{X.Y.Z}.tar 또는 {ecu}_{X.Y.Z}.cfg 형식의 파일명에서
+    {ecu}_{X.Y.Z}.tar, {ecu}_{X.Y.Z}.cfg, 또는 {ecu}_{X.Y.Z}.bin 형식의 파일명에서
       ecu, version, stem, ext를 추출.
     예)
       ivi_1.0.0.tar -> ("ivi", "1.0.0", "ivi_1.0.0", ".tar")
@@ -88,8 +88,9 @@ def parse_artifact_name_version(path: str):
     """
     fname = os.path.basename(path)
     stem, ext = os.path.splitext(fname)
+    ext = ext.lower()
 
-    if ext not in (".tar", ".cfg"):
+    if ext not in (".tar", ".cfg", ".bin"):
         raise ValueError(f"지원하지 않는 업데이트 파일명: {fname}")
 
     m = re.match(r"^(?P<ecu>.+?)_(?P<ver>\d+(?:\.\d+)*)$", stem)

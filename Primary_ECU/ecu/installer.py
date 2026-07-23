@@ -470,6 +470,283 @@ class Installer:
         return cfg
 
 
+    def download_artifacts(self, update_images: List, base_url: str) -> dict:
+        """Download and verify update artifacts for every ECU.
+
+        Target names do not include an extension. Try each supported extension
+        and keep only the file that matches the signed length and hashes.
+        Installation is deliberately left to each ECU's installer.
+        """
+        storage_dir = Path("./downloads/artifact_storage")
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        supported_extensions = (".bin", ".tar", ".cfg")
+
+        results = []
+
+        for item in update_images:
+            part_path = None
+
+            try:
+                ecu_serial = str(item["ecu"])
+                image_name = str(item["images"]["image_name"])
+                image_info = item["images"]["image_info"]
+
+                if Path(ecu_serial).name != ecu_serial:
+                    raise RuntimeError(f"invalid ECU name: {ecu_serial}")
+
+                if Path(image_name).name != image_name:
+                    raise RuntimeError(f"invalid image name: {image_name}")
+
+                hashes = image_info.get("hashes") or {}
+                expected_sha256 = hashes.get("sha256")
+                expected_sha512 = hashes.get("sha512")
+                expected_length = image_info.get("length")
+
+                if not expected_sha256 or not expected_sha512 or expected_length is None:
+                    raise RuntimeError(
+                        "artifact metadata is missing length, SHA-256, or SHA-512"
+                    )
+
+                selected = None
+                attempts = []
+
+                for extension in supported_extensions:
+                    filename = f"{image_name}{extension}"
+                    artifact_url = urljoin(
+                        base_url.rstrip("/") + "/",
+                        f"images/{filename}",
+                    )
+                    out_path = storage_dir / filename
+                    part_path = storage_dir / f"{filename}.part"
+
+                    print(
+                        f"[Primary ECU] TRY ARTIFACT ({ecu_serial}): "
+                        f"{artifact_url}"
+                    )
+
+                    with requests.get(
+                        artifact_url,
+                        stream=True,
+                        verify=False,
+                        timeout=30,
+                    ) as response:
+                        if getattr(response, "status_code", None) == 404:
+                            attempts.append(f"{filename}: not found")
+                            continue
+
+                        response.raise_for_status()
+
+                        with part_path.open("wb") as artifact_file:
+                            for data in response.iter_content(chunk_size=8192):
+                                if data:
+                                    artifact_file.write(data)
+
+                    actual_length = part_path.stat().st_size
+                    actual_sha256 = self._sha256_file(str(part_path))
+                    actual_sha512 = self._sha512_file(str(part_path))
+
+                    matches_metadata = (
+                        actual_length == int(expected_length)
+                        and actual_sha256.lower() == str(expected_sha256).lower()
+                        and actual_sha512.lower() == str(expected_sha512).lower()
+                    )
+
+                    if not matches_metadata:
+                        attempts.append(f"{filename}: metadata mismatch")
+                        if part_path.exists():
+                            part_path.unlink()
+                        part_path = None
+                        continue
+
+                    os.replace(part_path, out_path)
+                    part_path = None
+                    selected = {
+                        "filename": filename,
+                        "file_type": extension.lstrip("."),
+                        "out_path": out_path,
+                        "length": actual_length,
+                        "sha256": actual_sha256,
+                    }
+                    break
+
+                if selected is None:
+                    raise RuntimeError(
+                        "no .bin, .tar, or .cfg artifact matched the signed metadata: "
+                        + "; ".join(attempts)
+                    )
+
+                results.append({
+                    "ecu_serial": ecu_serial,
+                    "artifact": selected["filename"],
+                    "path": str(selected["out_path"]),
+                    "file_type": selected["file_type"],
+                    "length": selected["length"],
+                    "sha256": selected["sha256"],
+                    "status": "OK",
+                })
+                print(
+                    f"[Primary ECU] Artifact verified and saved: "
+                    f"{selected['out_path']}"
+                )
+
+            except Exception as e:
+                print(f"[FAIL] artifact download failed: {e}")
+                results.append({
+                    "status": "FAIL",
+                    "reason": str(e),
+                })
+
+            finally:
+                if part_path is not None and part_path.exists():
+                    part_path.unlink()
+
+        return {
+            "ok": bool(results) and all(r.get("status") == "OK" for r in results),
+            "results": results,
+        }
+
+
+    def download_firmware(self, update_images: List, base_url: str) -> dict:
+        """Backward-compatible wrapper for the former STM32-only entry point."""
+        return self.download_artifacts(update_images, base_url)
+
+
+    def install_serial_firmware(self, downloaded_results: List) -> dict:
+        """Install the matching .bin on the currently connected Secondary.
+
+        All ECU artifacts remain downloadable. At installation time the
+        Secondary reports its own ECU ID and inactive target slot. The Primary
+        then selects exactly one verified image matching both values.
+        """
+        from .secondary_serial import SecondarySerial
+
+        verified_bins = [
+            item
+            for item in downloaded_results
+            if item.get("status") == "OK" and item.get("file_type") == "bin"
+        ]
+
+        if not verified_bins:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "no verified .bin artifact",
+            }
+
+        try:
+            with SecondarySerial() as secondary:
+                before_status = secondary.get_status()
+
+                if not before_status["ready"]:
+                    raise RuntimeError(
+                        f"Secondary is not ready: {before_status['raw']}"
+                    )
+
+                same_ecu = [
+                    item
+                    for item in verified_bins
+                    if item.get("ecu_serial") == before_status["ecu_serial"]
+                ]
+
+                if not same_ecu:
+                    return {
+                        "ok": True,
+                        "skipped": True,
+                        "reason": (
+                            "no .bin artifact for connected ECU "
+                            f"{before_status['ecu_serial']}"
+                        ),
+                        "secondary_before": before_status,
+                    }
+
+                candidates = []
+                inspected = []
+
+                for item in same_ecu:
+                    linked_slot = SecondarySerial.detect_firmware_slot(
+                        item["path"]
+                    )
+                    inspected.append({
+                        "artifact": item.get("artifact"),
+                        "linked_slot": linked_slot,
+                    })
+
+                    if linked_slot == before_status["target_slot"]:
+                        candidates.append(item)
+
+                if not candidates:
+                    raise RuntimeError(
+                        "no firmware image matches the inactive target slot "
+                        f"{before_status['target_slot']}; inspected={inspected}"
+                    )
+
+                if len(candidates) != 1:
+                    raise RuntimeError(
+                        "multiple firmware images match connected ECU and "
+                        f"target slot {before_status['target_slot']}: "
+                        f"{[item.get('artifact') for item in candidates]}"
+                    )
+
+                target = candidates[0]
+
+                print(
+                    "[Primary ECU] Install Serial firmware: "
+                    f"ECU={before_status['ecu_serial']}, "
+                    f"ACTIVE={before_status['active_slot']}, "
+                    f"TARGET={before_status['target_slot']}, "
+                    f"ARTIFACT={target['artifact']}"
+                )
+
+                transfer_result = secondary.send_firmware(
+                    firmware_path=target["path"],
+                    expected_sha256=target["sha256"],
+                    expected_target_slot=before_status["target_slot"],
+                    max_firmware_size=before_status["max_size"],
+                )
+
+                # The application sends FW_OK, waits briefly, resets, and then
+                # the bootloader starts the newly selected slot.
+                reboot_delay = float(
+                    os.environ.get("STM32_REBOOT_DELAY", "2.0")
+                )
+                if reboot_delay > 0:
+                    time.sleep(reboot_delay)
+
+                after_status = secondary.get_status(timeout_seconds=10.0)
+
+                if after_status["ecu_serial"] != before_status["ecu_serial"]:
+                    raise RuntimeError(
+                        "Secondary ECU ID changed after update: "
+                        f"before={before_status['ecu_serial']}, "
+                        f"after={after_status['ecu_serial']}"
+                    )
+
+                if after_status["active_slot"] != before_status["target_slot"]:
+                    raise RuntimeError(
+                        "firmware transfer finished but target slot did not "
+                        f"become active: expected={before_status['target_slot']}, "
+                        f"actual={after_status['active_slot']}"
+                    )
+
+                return {
+                    "ok": True,
+                    "skipped": False,
+                    "ecu_serial": before_status["ecu_serial"],
+                    "artifact": target["artifact"],
+                    "secondary_before": before_status,
+                    "transfer": transfer_result,
+                    "secondary_after": after_status,
+                }
+
+        except Exception as e:
+            print(f"[FAIL] Serial firmware installation failed: {e}")
+            return {
+                "ok": False,
+                "skipped": False,
+                "reason": str(e),
+            }
+
+
     def download_config_to_secondary(self, update_images: List, base_url: str) -> dict:
         from .secondary_serial import SecondarySerial
 

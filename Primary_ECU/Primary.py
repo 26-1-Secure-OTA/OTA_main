@@ -162,26 +162,48 @@ class PrimeEcuHandler:
                 })
 
             else:
-                print("[Primary ECU] Download config and send to Secondary")
+                print("[Primary ECU] Download verified ECU artifacts")
 
-                config_updates = [
-                    item for item in update_images
-                    if item.get("ecu") == "stm32-led-001"
-                ]
+                artifact_updates = update_images
 
-                if not config_updates:
-                    print("[Primary ECU] No STM32 config update target")
-                    self.reporter.report("secondary_update_skipped", {
-                        "reason": "no stm32-led-001 target"
+                if not artifact_updates:
+                    print("[Primary ECU] No ECU update target")
+                    self.reporter.report("artifact_download_skipped", {
+                        "reason": "no ECU update target"
                     })
                     return
 
-                result = self.installer.download_config_to_secondary(config_updates, base_url)
+                result = self.installer.download_artifacts(artifact_updates, base_url)
 
                 if result["ok"]:
-                    self.reporter.report("secondary_update_ok", result)
+                    self.reporter.report("artifact_download_ok", result)
+
+                    install_result = self.installer.install_serial_firmware(
+                        result["results"]
+                    )
+
+                    if install_result.get("skipped"):
+                        print(
+                            "[Primary ECU] Serial firmware install skipped: "
+                            f"{install_result.get('reason')}"
+                        )
+                        self.reporter.report(
+                            "serial_firmware_install_skipped",
+                            install_result,
+                        )
+                    elif install_result["ok"]:
+                        print("[Primary ECU] Serial firmware install succeeded")
+                        self.reporter.report(
+                            "serial_firmware_install_ok",
+                            install_result,
+                        )
+                    else:
+                        self.reporter.report(
+                            "serial_firmware_install_failed",
+                            install_result,
+                        )
                 else:
-                    self.reporter.report("secondary_update_failed", result)
+                    self.reporter.report("artifact_download_failed", result)
 
             return
 
