@@ -2,24 +2,24 @@
   "signatures": [
     {
       "keyid": "507b54e2b4b3606dd011a9455f9fbc043b8cb71d9601e9b8d449aafab48bf10d",
-      "sig": "534687c270a34dc9b8947b5a7c88e5d1a01e075f7bc1ab11d0da0595ceea8d838053bdcbeefe3aa2744b6eddce25a1eb7a5a06867f6ee48f30fcbe9bc545820e"
+      "sig": "35413655dc9cf1e03f7e082a34fbda7ea25f9e2312790a54fcc0d11d38792b58643d7cb7688243add658917e5339fa936e2cd004eb0493ac7fce65fb0566700a"
     }
   ],
   "signed": {
     "_type": "targets",
     "version": 1,
-    "expires": "2026-05-20T11:42:07Z",
+    "expires": "2026-08-05T09:55:28Z",
     "targets": [
       {
-        "ecu": "ivi",
+        "ecu": "stm32-led-001",
         "images": {
-          "image_name": "ivi_3.0.0",
+          "image_name": "stm32-led-001_1.0.6",
           "image_info": {
             "hashes": {
-              "sha256": "509ecea57b315325cfb926cef513f3ae3e3d21ba4ac1de626ded73d54b9f2ce7",
-              "sha512": "260df2f8c4c2e28dcdefb7e83a179bede30d252f71b1df4249d28eb64a16e4125293c09b4cc922f33867e57c549cb4175775c9d17b3b5efb92621d4fc290e566"
+              "sha256": "3ba831241a8659309dc36386858c42b6760afbb8d83cf003b37fa360e1e04983",
+              "sha512": "08a9b386631f96912ef8b2b2c78abf6f550d8c1d3f9ce510d7cfe88951c6c6ee49b1d5d538ca3a2e9b24a7b6da04e814c5324798b8caad080711c34480a675e5"
             },
-            "length": 902191104
+            "length": 12288
           }
         }
       }

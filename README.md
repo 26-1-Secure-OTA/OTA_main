@@ -169,3 +169,33 @@ Prime ECU 실행과 동시에 다운로드가 진행되며, Prime ECU에서 전�
 
 ------------------------------------------------------------------------
 
+## STM32 A/B slot firmware release
+
+STM32 firmware releases must contain two binaries built from the same source
+and version. Only the linker origin/vector-table location differs.
+
+```text
+stm32-led-001_1.2.0_slot_a.bin
+stm32-led-001_1.2.0_slot_b.bin
+```
+
+Copy both files into `OTA_Director_Server/src_add/stage`. The watchdog checks
+the Cortex-M vector table, records `custom.target_slot` in signed targets
+metadata, and keeps A/B artifacts as separate targets. Director advertises a
+slot firmware release only when A and B variants of the same version are both
+available.
+
+At update time Primary performs this sequence:
+
+1. Verify Director and Image Repository metadata.
+2. Send `STATUS_REQ` to the STM32 Secondary.
+3. Read `ACTIVE` and the inactive `TARGET` slot.
+4. Download only the signed artifact for `TARGET`.
+5. Check metadata slot, filename slot, and the binary Reset_Handler address.
+6. Re-read Secondary status before transfer; abort if the slot changed.
+7. Transfer the firmware and verify that the target slot became active.
+
+For example, when the Secondary reports `ACTIVE=A,TARGET=B`, Primary requests
+only `stm32-led-001_<version>_slot_b.bin`. A partially uploaded or mismatched
+A/B release is not offered to the vehicle.
+
