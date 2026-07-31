@@ -5,6 +5,7 @@ import re
 import time
 import json
 import shutil
+import struct
 import binascii
 import hashlib
 from datetime import datetime, timezone, timedelta
@@ -56,6 +57,47 @@ def ensure_dirs(*paths: str) -> None:
         if p:
             os.makedirs(p, exist_ok=True)
 
+def wait_until_file_stable(
+    path: str,
+    minimum_size: int = 1,
+    interval_seconds: float = 0.5,
+    stable_rounds: int = 3,
+    timeout_seconds: float = 30.0,
+) -> bool:
+    """Wait until an uploaded stage file stops changing."""
+    if minimum_size < 0:
+        raise ValueError("minimum_size must not be negative")
+    if interval_seconds <= 0 or stable_rounds <= 0 or timeout_seconds <= 0:
+        raise ValueError("file stability timing values must be positive")
+
+    deadline = time.monotonic() + timeout_seconds
+    previous_state = None
+    unchanged_rounds = 0
+
+    while time.monotonic() < deadline:
+        try:
+            stat_result = os.stat(path)
+            current_state = (stat_result.st_size, stat_result.st_mtime_ns)
+        except OSError:
+            current_state = None
+
+        if (
+            current_state is not None
+            and current_state[0] >= minimum_size
+            and current_state == previous_state
+        ):
+            unchanged_rounds += 1
+            if unchanged_rounds >= stable_rounds:
+                return True
+        else:
+            unchanged_rounds = 0
+
+        previous_state = current_state
+        time.sleep(interval_seconds)
+
+    return False
+
+
 def canonical_json_bytes(obj: Any) -> bytes:
     return json.dumps(
         obj,
@@ -78,13 +120,18 @@ def hashlib_sha256_hex(b: bytes) -> str:
     return h.hexdigest()
 
 
+_ARTIFACT_NAME_RE = re.compile(
+    r"^(?P<ecu>.+?)_(?P<ver>\d+(?:\.\d+)*)"
+    r"(?:_slot[-_](?P<slot>[abAB]))?$"
+)
+
+
 def parse_artifact_name_version(path: str):
-    """
-    {ecu}_{X.Y.Z}.tar, {ecu}_{X.Y.Z}.cfg, 또는 {ecu}_{X.Y.Z}.bin 형식의 파일명에서
-      ecu, version, stem, ext를 추출.
-    예)
-      ivi_1.0.0.tar -> ("ivi", "1.0.0", "ivi_1.0.0", ".tar")
-      stm32-led-001_1.0.1.cfg -> ("stm32-led-001", "1.0.1", "stm32-led-001_1.0.1", ".cfg")
+    """Parse an artifact name into ECU, version, stem, extension, slot.
+
+    Slot firmware uses ``{ecu}_{version}_slot_a.bin`` or
+    ``{ecu}_{version}_slot_b.bin``. Other artifacts keep the existing
+    ``{ecu}_{version}.{ext}`` convention.
     """
     fname = os.path.basename(path)
     stem, ext = os.path.splitext(fname)
@@ -93,15 +140,53 @@ def parse_artifact_name_version(path: str):
     if ext not in (".tar", ".cfg", ".bin"):
         raise ValueError(f"지원하지 않는 업데이트 파일명: {fname}")
 
-    m = re.match(r"^(?P<ecu>.+?)_(?P<ver>\d+(?:\.\d+)*)$", stem)
+    m = _ARTIFACT_NAME_RE.match(stem)
     if not m:
-        raise ValueError(f"이름/버전 파싱 실패: {stem}")
+        raise ValueError(f"invalid artifact name/version: {stem}")
 
     ecu = m.group("ecu")
     ver = m.group("ver")
-    artifact_stem = f"{ecu}_{ver}"
+    slot_raw = m.group("slot")
+    target_slot = slot_raw.upper() if slot_raw else None
+    artifact_stem = (
+        f"{ecu}_{ver}_slot_{target_slot.lower()}"
+        if target_slot
+        else f"{ecu}_{ver}"
+    )
 
-    return ecu, ver, artifact_stem, ext
+    if target_slot is not None and ext != ".bin":
+        raise ValueError("slot suffix is supported only for .bin firmware")
+
+    return ecu, ver, artifact_stem, ext, target_slot
+
+
+SLOT_RANGES = {
+    "A": (0x08004000, 0x08010000),
+    "B": (0x08010000, 0x0801C000),
+}
+
+
+def detect_stm32_firmware_slot(image_path: str) -> str:
+    """Detect the linked slot from the Cortex-M Reset_Handler vector."""
+    with open(image_path, "rb") as firmware:
+        vector_table = firmware.read(8)
+    if len(vector_table) != 8:
+        raise ValueError("firmware is too small to contain a vector table")
+
+    initial_sp, reset_vector = struct.unpack("<II", vector_table)
+    reset_handler = reset_vector & ~1
+    if not (0x20000000 < initial_sp <= 0x20005000):
+        raise ValueError(f"invalid initial stack pointer: 0x{initial_sp:08X}")
+    if (reset_vector & 1) == 0:
+        raise ValueError(f"Reset_Handler is not Thumb: 0x{reset_vector:08X}")
+
+    for slot, (start, end) in SLOT_RANGES.items():
+        if start <= reset_handler < end:
+            return slot
+    raise ValueError(
+        f"Reset_Handler is outside Slot A/B: 0x{reset_handler:08X}"
+    )
+
 
 def load_json_if_exists(path: str) -> Optional[dict]:
     if not os.path.exists(path):
@@ -277,16 +362,19 @@ def sign_image_metadata_for_ecu(ecu: str, signed: Dict[str, Any]) -> Dict[str, A
     }
     return meta
 
-def _parse_target_name_ver(stem: str) -> tuple[Optional[str], Optional[str]]:
-    """
-    ivi_1.0.0 같은 target 이름에서
-      name="ivi", ver="1.0.0" 으로 분리
-    실패하면 (None, None) 리턴
-    """
-    m = re.match(r"^(?P<name>.+?)_(?P<ver>\d+(?:\.\d+)*)$", stem)
+def _parse_target_name_ver(
+    stem: str,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return the logical ECU name, version, and optional target slot."""
+    m = _ARTIFACT_NAME_RE.match(stem)
     if not m:
-        return None, None
-    return m.group("name"), m.group("ver")
+        return None, None, None
+    slot_raw = m.group("slot")
+    return (
+        m.group("ecu"),
+        m.group("ver"),
+        slot_raw.upper() if slot_raw else None,
+    )
 
 
 def _split_ver(ver: str) -> list[int]:
@@ -322,14 +410,14 @@ def should_accept_new_target(parent_targets_path: str, target_name: str) -> tupl
     signed = obj.get("signed", {})
     targets = signed.get("targets", {})
 
-    new_name, new_ver = _parse_target_name_ver(target_name)
+    new_name, new_ver, new_slot = _parse_target_name_ver(target_name)
     if not new_name or not new_ver:
         return False, f"invalid target name: {target_name}"
 
     for existing in targets.keys():
-        old_name, old_ver = _parse_target_name_ver(existing)
+        old_name, old_ver, old_slot = _parse_target_name_ver(existing)
 
-        if old_name != new_name or not old_ver:
+        if old_name != new_name or old_slot != new_slot or not old_ver:
             continue
 
         if _version_gt(old_ver, new_ver):
@@ -344,7 +432,10 @@ def update_parent_targets(parent_targets_path: str,
                           target_name: str,
                           image_path: str,
                           sha256_hex: str,
-                          sha512_hex: str) -> None:
+                          sha512_hex: str,
+                          target_slot: Optional[str] = None,
+                          ecu: Optional[str] = None,
+                          version: Optional[str] = None) -> None:
     """
     meta/targets.json 의 signed.targets[target_name] 갱신.
     같은 이미지 이름(ivi, cluster 등)에 대해서는
@@ -371,13 +462,13 @@ def update_parent_targets(parent_targets_path: str,
     targets = signed.setdefault("targets", {})
 
     # 새로 들어온 target_name 을 name/ver로 분리 (예: ivi_2.0.0 → name=ivi, ver=2.0.0)
-    new_name, new_ver = _parse_target_name_ver(target_name)
+    new_name, new_ver, new_slot = _parse_target_name_ver(target_name)
 
     if new_name and new_ver:
         # 이미 들어있는 targets 중, 같은 name(ivi)이면 버전 비교해서 정리
         for existing in list(targets.keys()):
-            old_name, old_ver = _parse_target_name_ver(existing)
-            if old_name != new_name or not old_ver:
+            old_name, old_ver, old_slot = _parse_target_name_ver(existing)
+            if old_name != new_name or old_slot != new_slot or not old_ver:
                 continue
 
             # 기존이 더 최신이면, 새 버전을 굳이 넣지 않음
@@ -403,13 +494,22 @@ def update_parent_targets(parent_targets_path: str,
 
     # 여기까지 왔으면 새 버전을 넣으면 됨 (기존 구버전은 위에서 삭제됨)
     length = os.path.getsize(image_path)
-    targets[target_name] = {
+    target_info = {
         "hashes": {
             "sha256": sha256_hex,
             "sha512": sha512_hex,
         },
         "length": length,
     }
+    if target_slot is not None:
+        target_info["custom"] = {
+            "artifact_type": "firmware",
+            "ecu": ecu or new_name,
+            "version": version or new_ver,
+            "target_slot": target_slot,
+        }
+
+    targets[target_name] = target_info
 
     # version 증가 + expires 갱신
     try:
@@ -496,12 +596,37 @@ class FileChangeHandler(FileSystemEventHandler):
             return
 
         image_path = event.src_path
-        # 0) tar 형식의 파일 업로드 확인하여 대상 ECU 및 버전 확인
+
+        # 0) 파일명에서 대상 ECU, 버전 및 슬롯 확인
         try:
-            ecu, image_ver, image_stem, ext = parse_artifact_name_version(image_path)
+            ecu, image_ver, image_stem, ext, target_slot = (
+                parse_artifact_name_version(image_path)
+            )
         except ValueError as e:
             print(f"[watchdog] 파일명 파싱 실패: {e}")
             return
+
+        # on_created는 파일 복사가 끝나기 전에 발생할 수 있으므로
+        # 크기와 수정 시간이 안정된 뒤 벡터 테이블과 해시를 읽는다.
+        print(f"[watchdog] 업로드 파일 안정화 대기: {image_path}")
+        if not wait_until_file_stable(image_path):
+            print(
+                f"[watchdog] 업로드 파일 안정화 실패(Timeout): "
+                f"{image_path}"
+            )
+            return
+
+        if target_slot is not None:
+            try:
+                linked_slot = detect_stm32_firmware_slot(image_path)
+                if linked_slot != target_slot:
+                    raise ValueError(
+                        f"firmware filename/link mismatch: "
+                        f"filename={target_slot}, linked={linked_slot}"
+                    )
+            except (OSError, ValueError) as e:
+                print(f"[watchdog] 펌웨어 슬롯 검사 실패: {e}")
+                return
 
         target_name = image_stem  # 상위 targets에서의 이름 (예: ivi_1.0.0)
 
@@ -548,6 +673,9 @@ class FileChangeHandler(FileSystemEventHandler):
                     image_path,
                     sha256_hex,
                     sha512_hex,
+                    target_slot=target_slot,
+                    ecu=ecu,
+                    version=image_ver,
                 )
                 update_parent_targets(
                     self.director_parent_targets_json,
@@ -555,6 +683,9 @@ class FileChangeHandler(FileSystemEventHandler):
                     image_path,
                     sha256_hex,
                     sha512_hex,
+                    target_slot=target_slot,
+                    ecu=ecu,
+                    version=image_ver,
                 )
                 print(f"[watchdog] 상위 targets 갱신 완료: "
                       f"{self.parent_targets_json}, {self.director_parent_targets_json}")

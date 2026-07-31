@@ -180,40 +180,62 @@ class Verifier:
     
     # Image 및 Director Target 메타데이터 교차 검증
     def hash_check(self, update_path: str, image_target: JsonMeta) -> List:
+        """Cross-check every Director target against signed Image metadata."""
         with open(update_path, "r", encoding="utf-8") as f:
             update_meta = json.load(f)
 
-        update_data = update_meta.get("signed")
-        update_targets = update_data["targets"]
+        update_targets = (update_meta.get("signed") or {}).get("targets") or []
+        if not isinstance(update_targets, list) or not isinstance(image_target, dict):
+            print("[FAIL] Invalid Director or Image target metadata")
+            return []
 
-        h_check = False
-        update_image = []
-
+        verified_targets = []
         for target in update_targets:
-            h_check = False
+            try:
+                images = target["images"]
+                update_name = images["image_name"]
+                director_info = images["image_info"]
+                image_info = image_target[update_name]
 
-            update_name = target["images"]["image_name"]
-            sha_256 = target["images"]["image_info"]["hashes"]["sha256"]
-            sha_512 = target["images"]["image_info"]["hashes"]["sha512"]
+                director_hashes = director_info["hashes"]
+                image_hashes = image_info["hashes"]
+                if (
+                    director_hashes["sha256"].lower()
+                    != image_hashes["sha256"].lower()
+                    or director_hashes["sha512"].lower()
+                    != image_hashes["sha512"].lower()
+                    or int(director_info["length"]) != int(image_info["length"])
+                ):
+                    raise ValueError(f"hash/length mismatch for {update_name}")
 
-            if sha_256 == image_target[update_name]["hashes"]["sha256"]:
-                h_check = True
-            else:
-                h_check = False
+                director_slot = (director_info.get("custom") or {}).get(
+                    "target_slot"
+                )
+                image_slot = (image_info.get("custom") or {}).get(
+                    "target_slot"
+                )
+                if director_slot != image_slot:
+                    raise ValueError(f"target_slot mismatch for {update_name}")
+                if image_slot is not None and str(image_slot).upper() not in (
+                    "A",
+                    "B",
+                ):
+                    raise ValueError(f"invalid target_slot for {update_name}")
 
-            if sha_512 == image_target[update_name]["hashes"]["sha512"]:
-                h_check = True
-            else:
-                h_check = False
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                print(f"[FAIL] Target metadata cross-check failed: {exc}")
+                return []
 
-        if h_check:
-            print("[Primary ECU] Update target hash is correct with Image target")
-            return update_targets
-        else:
-            print("[FAIL] Update target hash is different with Image target")
-            return update_image
+            verified_targets.append(target)
 
-    
+        if not verified_targets:
+            print("[FAIL] No update targets to cross-check")
+            return []
+
+        print("[Primary ECU] All update targets match Image metadata")
+        return verified_targets
+
+
     def verify_director_chain(self, timestamp: JsonMeta, snapshot: JsonMeta, targets: JsonMeta) -> VerifyResult:
         """
         Director의 메타데이터 순차 검증

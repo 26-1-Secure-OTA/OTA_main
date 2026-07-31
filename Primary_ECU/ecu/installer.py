@@ -470,6 +470,91 @@ class Installer:
         return cfg
 
 
+    @staticmethod
+    def _target_slot_from_update(item: dict) -> Optional[str]:
+        """Read and cross-check the slot encoded in metadata and target name."""
+        images = item.get("images") or {}
+        image_name = str(images.get("image_name") or "")
+        image_info = images.get("image_info") or {}
+        metadata_slot = (image_info.get("custom") or {}).get("target_slot")
+        if metadata_slot is not None:
+            metadata_slot = str(metadata_slot).upper()
+            if metadata_slot not in ("A", "B"):
+                raise RuntimeError(
+                    f"invalid target_slot metadata for {image_name}: "
+                    f"{metadata_slot}"
+                )
+
+        match = re.search(r"_slot[-_]([ab])$", image_name, re.IGNORECASE)
+        name_slot = match.group(1).upper() if match else None
+        if metadata_slot != name_slot:
+            raise RuntimeError(
+                f"slot metadata/name mismatch for {image_name}: "
+                f"metadata={metadata_slot}, name={name_slot}"
+            )
+        return metadata_slot
+
+
+    def select_updates_for_secondary(self, update_images: List) -> dict:
+        """Choose only the firmware for the Secondary's inactive slot.
+
+        Non-slot artifacts are preserved. If slot-specific artifacts for the
+        connected Secondary are present, its STATUS is queried before any
+        image download and exactly one matching target is retained.
+        """
+        from .secondary_serial import SecondarySerial
+
+        parsed = [
+            (item, self._target_slot_from_update(item))
+            for item in update_images
+        ]
+        if not any(slot is not None for _, slot in parsed):
+            return {
+                "updates": list(update_images),
+                "secondary_status": None,
+            }
+
+        with SecondarySerial() as secondary:
+            status = secondary.get_status()
+
+        if not status["ready"]:
+            raise RuntimeError(f"Secondary is not ready: {status['raw']}")
+
+        selected = []
+        relevant = []
+        matches = []
+        for item, target_slot in parsed:
+            if target_slot is None:
+                selected.append(item)
+                continue
+
+            if item.get("ecu") != status["ecu_serial"]:
+                # This Primary controls one serial Secondary. Do not download
+                # firmware intended for another Secondary ECU.
+                continue
+
+            relevant.append(item)
+            if target_slot == status["target_slot"]:
+                selected.append(item)
+                matches.append(item)
+
+        if relevant and len(matches) != 1:
+            raise RuntimeError(
+                "expected exactly one firmware target for inactive slot "
+                f"{status['target_slot']}, found={len(matches)}"
+            )
+
+        print(
+            "[Primary ECU] Secondary selected before download: "
+            f"ECU={status['ecu_serial']}, ACTIVE={status['active_slot']}, "
+            f"TARGET={status['target_slot']}"
+        )
+        return {
+            "updates": selected,
+            "secondary_status": status,
+        }
+
+
     def download_artifacts(self, update_images: List, base_url: str) -> dict:
         """Download and verify update artifacts for every ECU.
 
@@ -490,6 +575,7 @@ class Installer:
                 ecu_serial = str(item["ecu"])
                 image_name = str(item["images"]["image_name"])
                 image_info = item["images"]["image_info"]
+                expected_target_slot = self._target_slot_from_update(item)
 
                 if Path(ecu_serial).name != ecu_serial:
                     raise RuntimeError(f"invalid ECU name: {ecu_serial}")
@@ -558,6 +644,23 @@ class Installer:
                         part_path = None
                         continue
 
+                    if expected_target_slot is not None:
+                        if extension != ".bin":
+                            raise RuntimeError(
+                                "slot-specific target resolved to a non-bin "
+                                f"artifact: {filename}"
+                            )
+                        from .secondary_serial import SecondarySerial
+                        linked_slot = SecondarySerial.detect_firmware_slot(
+                            str(part_path)
+                        )
+                        if linked_slot != expected_target_slot:
+                            raise RuntimeError(
+                                f"firmware slot mismatch for {filename}: "
+                                f"metadata={expected_target_slot}, "
+                                f"linked={linked_slot}"
+                            )
+
                     os.replace(part_path, out_path)
                     part_path = None
                     selected = {
@@ -566,6 +669,7 @@ class Installer:
                         "out_path": out_path,
                         "length": actual_length,
                         "sha256": actual_sha256,
+                        "target_slot": expected_target_slot,
                     }
                     break
 
@@ -582,6 +686,7 @@ class Installer:
                     "file_type": selected["file_type"],
                     "length": selected["length"],
                     "sha256": selected["sha256"],
+                    "target_slot": selected["target_slot"],
                     "status": "OK",
                 })
                 print(
@@ -611,7 +716,11 @@ class Installer:
         return self.download_artifacts(update_images, base_url)
 
 
-    def install_serial_firmware(self, downloaded_results: List) -> dict:
+    def install_serial_firmware(
+        self,
+        downloaded_results: List,
+        expected_secondary_status: Optional[dict] = None,
+    ) -> dict:
         """Install the matching .bin on the currently connected Secondary.
 
         All ECU artifacts remain downloadable. At installation time the
@@ -642,6 +751,22 @@ class Installer:
                         f"Secondary is not ready: {before_status['raw']}"
                     )
 
+                if expected_secondary_status is not None:
+                    identity_fields = ("ecu_serial", "active_slot", "target_slot")
+                    changed = [
+                        field
+                        for field in identity_fields
+                        if before_status[field]
+                        != expected_secondary_status.get(field)
+                    ]
+                    if changed:
+                        raise RuntimeError(
+                            "Secondary slot state changed during download: "
+                            f"fields={changed}, "
+                            f"before={expected_secondary_status['raw']}, "
+                            f"now={before_status['raw']}"
+                        )
+
                 same_ecu = [
                     item
                     for item in verified_bins
@@ -666,10 +791,18 @@ class Installer:
                     linked_slot = SecondarySerial.detect_firmware_slot(
                         item["path"]
                     )
+                    declared_slot = item.get("target_slot")
                     inspected.append({
                         "artifact": item.get("artifact"),
+                        "declared_slot": declared_slot,
                         "linked_slot": linked_slot,
                     })
+
+                    if declared_slot is not None and declared_slot != linked_slot:
+                        raise RuntimeError(
+                            "downloaded firmware declaration/link mismatch: "
+                            f"{inspected[-1]}"
+                        )
 
                     if linked_slot == before_status["target_slot"]:
                         candidates.append(item)

@@ -164,7 +164,20 @@ class PrimeEcuHandler:
             else:
                 print("[Primary ECU] Download verified ECU artifacts")
 
-                artifact_updates = update_images
+                try:
+                    selection = self.installer.select_updates_for_secondary(
+                        update_images
+                    )
+                except Exception as exc:
+                    print(f"[FAIL] Secondary target selection failed: {exc}")
+                    self.reporter.report(
+                        "secondary_target_selection_failed",
+                        {"reason": str(exc)},
+                    )
+                    return
+
+                artifact_updates = selection["updates"]
+                secondary_status = selection["secondary_status"]
 
                 if not artifact_updates:
                     print("[Primary ECU] No ECU update target")
@@ -179,7 +192,8 @@ class PrimeEcuHandler:
                     self.reporter.report("artifact_download_ok", result)
 
                     install_result = self.installer.install_serial_firmware(
-                        result["results"]
+                        result["results"],
+                        expected_secondary_status=secondary_status,
                     )
 
                     if install_result.get("skipped"):
