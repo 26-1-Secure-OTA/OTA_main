@@ -2,13 +2,13 @@
   "signatures": [
     {
       "keyid": "dab44e9cddb058e40366ebdc121f7e4285436f2886ab0f0a7610a918fc45037c",
-      "sig": "Ez7ibCRHpPfwU0UU+QHnLBNYSmckqSckbM7mJgItGwk+i7tpnUETIEndFvpfXKL+pnQ2/CBu8XLG/Y6PsDiRAA=="
+      "sig": "YvEjKTHaWGWjfaTOWYiI350DJplj7QOM52EEnsSGoSWFguiXnUcXZBj7u4837CkioXrEBeRn0L24dVebeb5fAQ=="
     }
   ],
   "signed": {
     "vin": "VIN-TEST-0001",
     "primary_ecu_serial": "primary0",
-    "expires": "2027-05-17T07:44:10Z",
+    "expires": "2027-08-02T09:33:16Z",
     "ecu_version": [
       {
         "ecu_serial": "ivi",
@@ -39,13 +39,39 @@
       {
         "ecu_serial": "stm32-led-001",
         "target_image": {
-          "filename": "stm32-led-001_0.0.0.cfg",
+          "filename": "stm32-led-001_0.0.0.bin",
           "fileinfo": {
             "hashes": {
-              "sha256": "d1569c9cd84b3f2d01c2fc45bb344cd82e08b72f52a7eea08b5f4c8407688f8f",
-              "sha512": "c7f44da22814d1d2daf1dd13a9bc32dffb89bf466e9260fe0e6add32af39df2d5476e14fc3eb452054b6f6163dcf7b21d842d1e7686fa51bc372a5ac98818c5c"
+              "sha256": "3ba831241a8659309dc36386858c42b6760afbb8d83cf003b37fa360e1e04983",
+              "sha512": "08a9b386631f96912ef8b2b2c78abf6f550d8c1d3f9ce510d7cfe88951c6c6ee49b1d5d538ca3a2e9b24a7b6da04e814c5324798b8caad080711c34480a675e5"
             },
-            "length": 82
+            "length": 12288
+          }
+        }
+      },
+      {
+        "ecu_serial": "stm32-led-002",
+        "target_image": {
+          "filename": "stm32-led-002_0.0.0.bin",
+          "fileinfo": {
+            "hashes": {
+              "sha256": "60064d8449d2878f84b29443b8106d795c27c015b1438849fc9765c44d493e1f",
+              "sha512": "b15a719a99d15e75d858701e225fa319b13a6a1af35f84a491510898509fbb7ac72fcc56daf766204fef69a632ce8c58030bd70a2a77253ce3f62dff191c9506"
+            },
+            "length": 12288
+          }
+        }
+      },
+      {
+        "ecu_serial": "stm32-led-003",
+        "target_image": {
+          "filename": "stm32-led-003_0.0.0.bin",
+          "fileinfo": {
+            "hashes": {
+              "sha256": "92da445d1205502dff651219c0b26e8112d425f4b29c94c55dd7cdd2e43f4c93",
+              "sha512": "df126aa8ce96bdf1aa6ebd35ef18bdb4fc0efacec1b694c24c313b9e3524945ba6d7b3441f7cc5b49f64e060cbba8df0ec29e51583bc4dfb0125ee24b8f4e689"
+            },
+            "length": 12292
           }
         }
       }

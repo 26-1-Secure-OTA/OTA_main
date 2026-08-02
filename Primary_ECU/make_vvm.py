@@ -398,7 +398,19 @@ def main():
     ecu_images = [
         {"ecu_serial": "ivi", "image_path": "./meta/ivi_0.0.0.bin"},
         {"ecu_serial": "cluster", "image_path": "./meta/cluster_1.0.0.bin"},
-        {"ecu_serial": "stm32-led-001", "image_path": "./meta/stm32-led-001_0.0.0.cfg"},
+
+        {
+            "ecu_serial": "stm32-led-001",
+            "image_path": "./meta/stm32-led-001_0.0.0.bin",
+        },
+        {
+            "ecu_serial": "stm32-led-002",
+            "image_path": "./meta/stm32-led-002_0.0.0.bin",
+        },
+        {
+            "ecu_serial": "stm32-led-003",
+            "image_path": "./meta/stm32-led-003_0.0.0.bin",
+        },
     ]
 
     # 1) Ed25519 (vvm 서명용) 키 로드 / 생성

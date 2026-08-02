@@ -7,6 +7,7 @@ import struct
 import time
 from pathlib import Path
 from typing import Optional
+from serial.tools import list_ports
 
 import serial
 
@@ -37,6 +38,62 @@ class SecondarySerial:
 
     There is no FW_END message because the STM32 already knows the exact size.
     """
+    EXPECTED_SECONDARIES = {
+        "stm32-led-001",
+        "stm32-led-002",
+        "stm32-led-003",
+    }
+
+
+    @staticmethod
+    def discover_secondaries() -> dict:
+        discovered = {}
+
+        for port_info in list_ports.comports():
+            port = port_info.device
+
+            # WSL에서 STM32 Virtual COM Port만 검사
+            if not port.startswith("/dev/ttyACM"):
+                continue
+
+            try:
+                with SecondarySerial(
+                    port=port,
+                    read_timeout=0.5,
+                    open_delay=2.0,
+                ) as secondary:
+                    status = secondary.get_status(timeout_seconds=5.0)
+
+                ecu_serial = status["ecu_serial"]
+
+                if ecu_serial not in SecondarySerial.EXPECTED_SECONDARIES:
+                    print(
+                        f"[DISCOVERY] Unknown Secondary: "
+                        f"ECU={ecu_serial}, PORT={port}"
+                    )
+                    continue
+
+                if ecu_serial in discovered:
+                    raise FirmwareTransferError(
+                        f"duplicate Secondary ID: {ecu_serial}"
+                    )
+
+                discovered[ecu_serial] = {
+                    "port": port,
+                    "status": status,
+                }
+
+                print(
+                    f"[DISCOVERY] ECU={ecu_serial}, "
+                    f"PORT={port}, "
+                    f"ACTIVE={status['active_slot']}, "
+                    f"TARGET={status['target_slot']}"
+                )
+
+            except Exception as exc:
+                print(f"[DISCOVERY] Failed on {port}: {exc}")
+
+        return discovered
 
     def __init__(
         self,

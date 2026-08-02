@@ -2,12 +2,12 @@
   "signatures": [
     {
       "keyid": "ecb9501db8ecc996dc55933e79ea82f8800b5b39e6bd7846f0f402d6d269be72",
-      "sig": "RhsISaNHUfK82XCrtpvXEnd+0ZdobiEp7OOE/gUjPzkAdbeNvq+KxIc7l2faTR3BXVRbGw+ogML1ojHOkDK0ValKVwIIPVHjuJsG/RfgK2bwJ2YVQhDI5Ug2Fymp4L4Yr3Z7dtMYwnZfCvNxXu3SP+QL8wrz70TSpZ3BuLZik8ABHNDNoAa0QwIQ+eEPxB9A1CJYGq2xUuVDodCimn5T9FxSHvc3/SswJ7mIuOQ1gIy75c6rE3OT+AQT9b9XXvuPVryKyB6GDc4zC1knsChpzU7dgk138SWFRfG52hcP2W/v765wQGKjPsE7MwGwmmZITCZ03HbiYljGxCrHCMhAow=="
+      "sig": "yVUWXPG5D4TlGiHrOvL+PA/b1tRYS0oC6KymaQxQ7iMwsGO2pxb72mno1mJzEFvBZ9b+0ka7zrewh8OVc00nAR76aBZrU7QfMuAfPwHRNGRg+4qObxYSFu5Vd2CGSeHrm2C3kbRntdqW9xRE5vbiDcMIYnKhwmj9T97rxXT4OkSMQxFKrfnz0cAKdxyYzvs4MMypw+uvGRqSVCvA49ITjOs5Gz0A+93MHE+a8Zi9+mvnDn+muWbtMxBIrQiv1UiVIyW+aIZggt4+NFEq/bK/T3MHGLzzjLT92JbncKp3HQJrbDIFisUNBKgPlI3Ly6iryz5pzPE4l926MS5utMIoFQ=="
     }
   ],
   "signed": {
     "_type": "root",
-    "expires": "2027-05-17T07:44:10Z",
+    "expires": "2027-08-02T09:33:16Z",
     "keys": {
       "ecb9501db8ecc996dc55933e79ea82f8800b5b39e6bd7846f0f402d6d269be72": {
         "keytype": "rsa",

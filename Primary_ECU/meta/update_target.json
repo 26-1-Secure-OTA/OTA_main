@@ -2,24 +2,50 @@
   "signatures": [
     {
       "keyid": "507b54e2b4b3606dd011a9455f9fbc043b8cb71d9601e9b8d449aafab48bf10d",
-      "sig": "35413655dc9cf1e03f7e082a34fbda7ea25f9e2312790a54fcc0d11d38792b58643d7cb7688243add658917e5339fa936e2cd004eb0493ac7fce65fb0566700a"
+      "sig": "840f07d380cf602bd0200c3a9a85798b0c54dadcb692cce4d1a80effde5b273232e036d6f10feec2dbca902921d2b4fe803ddd416e86ef601c6e839dec3d9306"
     }
   ],
   "signed": {
     "_type": "targets",
     "version": 1,
-    "expires": "2026-08-05T09:55:28Z",
+    "expires": "2026-08-16T12:46:22Z",
     "targets": [
       {
         "ecu": "stm32-led-001",
         "images": {
-          "image_name": "stm32-led-001_1.0.6",
+          "image_name": "stm32-led-001_1.0.1",
           "image_info": {
             "hashes": {
-              "sha256": "3ba831241a8659309dc36386858c42b6760afbb8d83cf003b37fa360e1e04983",
-              "sha512": "08a9b386631f96912ef8b2b2c78abf6f550d8c1d3f9ce510d7cfe88951c6c6ee49b1d5d538ca3a2e9b24a7b6da04e814c5324798b8caad080711c34480a675e5"
+              "sha256": "8750ea28f7b59d8038faade3279047c50fb28c1e046a467eece8a9a24faf7516",
+              "sha512": "b58103b35cc94abfa755d0f498fdc2147ace6f764b4fac81cdc2bcc39375362c99a1b9c1665e71090bda1f0f18527acd24b515bc96e7e4ab9d797dcd9e97e539"
             },
-            "length": 12288
+            "length": 12292
+          }
+        }
+      },
+      {
+        "ecu": "stm32-led-002",
+        "images": {
+          "image_name": "stm32-led-002_1.0.1",
+          "image_info": {
+            "hashes": {
+              "sha256": "9a92459982680457833d6bc7ae8464fe488c667d0eed58b0954e2424f9b9f1b3",
+              "sha512": "ee358a2a84127f46dbcbdbb7cc0812ce52f57c2bfcc2b3c96775eda33d6bf9684ec0da21ed18bccfc1494a48501644ed859264c4ce089e968c88f3ffe7f7c431"
+            },
+            "length": 12292
+          }
+        }
+      },
+      {
+        "ecu": "stm32-led-003",
+        "images": {
+          "image_name": "stm32-led-003_1.0.1",
+          "image_info": {
+            "hashes": {
+              "sha256": "92da445d1205502dff651219c0b26e8112d425f4b29c94c55dd7cdd2e43f4c93",
+              "sha512": "df126aa8ce96bdf1aa6ebd35ef18bdb4fc0efacec1b694c24c313b9e3524945ba6d7b3441f7cc5b49f64e060cbba8df0ec29e51583bc4dfb0125ee24b8f4e689"
+            },
+            "length": 12292
           }
         }
       }

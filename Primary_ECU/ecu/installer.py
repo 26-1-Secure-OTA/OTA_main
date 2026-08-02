@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from importlib.resources import path
-from importlib.resources import path
 from typing import Optional, Union, Dict, Any, List
 from urllib.parse import urljoin
 from pathlib import Path
@@ -17,6 +16,7 @@ import time
 from make_vvm import load_or_create_ed25519_private_key, calc_ed25519_keyid_from_public_key, sign_block_ed25519
 #from utils.metrics import measure
 from .storage import Storage
+from .secondary_state import SecondaryStateStore
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
@@ -42,6 +42,7 @@ class InstallResult:
 class Installer:
     def __init__(self, storage: Storage):
         self.storage = storage
+        self.secondary_states = SecondaryStateStore()
     
 
     def load_image_from_tar(self, tar_path: str) -> str:
@@ -611,7 +612,12 @@ class Installer:
         return self.download_artifacts(update_images, base_url)
 
 
-    def install_serial_firmware(self, downloaded_results: List) -> dict:
+    def _install_one_serial_firmware(
+        self,
+        downloaded_results: List,
+        port: str,
+        expected_ecu: str,
+    ) -> dict:
         """Install the matching .bin on the currently connected Secondary.
 
         All ECU artifacts remain downloadable. At installation time the
@@ -620,6 +626,8 @@ class Installer:
         """
         from .secondary_serial import SecondarySerial
 
+        target = None
+
         verified_bins = [
             item
             for item in downloaded_results
@@ -627,6 +635,12 @@ class Installer:
         ]
 
         if not verified_bins:
+            self.secondary_states.transition(
+                expected_ecu,
+                "HOLD",
+                ok=None,
+                reason="no verified .bin artifact",
+            )
             return {
                 "ok": True,
                 "skipped": True,
@@ -634,8 +648,16 @@ class Installer:
             }
 
         try:
-            with SecondarySerial() as secondary:
+            with SecondarySerial(port=port) as secondary:
                 before_status = secondary.get_status()
+
+                if before_status["ecu_serial"] != expected_ecu:
+                    raise RuntimeError(
+                        "port/ECU mismatch: "
+                        f"expected={expected_ecu}, "
+                        f"actual={before_status['ecu_serial']}, "
+                        f"port={port}"
+                    )
 
                 if not before_status["ready"]:
                     raise RuntimeError(
@@ -649,13 +671,20 @@ class Installer:
                 ]
 
                 if not same_ecu:
+                    reason = (
+                        "no .bin artifact for connected ECU "
+                        f"{before_status['ecu_serial']}"
+                    )
+                    self.secondary_states.transition(
+                        expected_ecu,
+                        "HOLD",
+                        ok=None,
+                        reason=reason,
+                    )
                     return {
                         "ok": True,
                         "skipped": True,
-                        "reason": (
-                            "no .bin artifact for connected ECU "
-                            f"{before_status['ecu_serial']}"
-                        ),
+                        "reason": reason,
                         "secondary_before": before_status,
                     }
 
@@ -689,6 +718,19 @@ class Installer:
 
                 target = candidates[0]
 
+                self.secondary_states.transition(
+                    expected_ecu,
+                    "TRANSFERRING",
+                    artifact=target.get("artifact"),
+                    firmware_sha256=target.get("sha256"),
+                    ok=None,
+                    details={
+                        "port": port,
+                        "active_slot": before_status["active_slot"],
+                        "target_slot": before_status["target_slot"],
+                    },
+                )
+
                 print(
                     "[Primary ECU] Install Serial firmware: "
                     f"ECU={before_status['ecu_serial']}, "
@@ -704,6 +746,23 @@ class Installer:
                     max_firmware_size=before_status["max_size"],
                 )
 
+                self.secondary_states.transition(
+                    expected_ecu,
+                    "STAGED",
+                    artifact=target.get("artifact"),
+                    firmware_sha256=target.get("sha256"),
+                    ok=None,
+                    details={"target_slot": before_status["target_slot"]},
+                )
+                self.secondary_states.transition(
+                    expected_ecu,
+                    "ACTIVATING",
+                    artifact=target.get("artifact"),
+                    firmware_sha256=target.get("sha256"),
+                    ok=None,
+                    details={"target_slot": before_status["target_slot"]},
+                )
+
                 # The application sends FW_OK, waits briefly, resets, and then
                 # the bootloader starts the newly selected slot.
                 reboot_delay = float(
@@ -711,6 +770,17 @@ class Installer:
                 )
                 if reboot_delay > 0:
                     time.sleep(reboot_delay)
+
+                self.secondary_states.transition(
+                    expected_ecu,
+                    "HEALTH_CHECK",
+                    artifact=target.get("artifact"),
+                    firmware_sha256=target.get("sha256"),
+                    ok=None,
+                    details={
+                        "expected_active_slot": before_status["target_slot"]
+                    },
+                )
 
                 after_status = secondary.get_status(timeout_seconds=10.0)
 
@@ -728,6 +798,19 @@ class Installer:
                         f"actual={after_status['active_slot']}"
                     )
 
+                self.secondary_states.transition(
+                    expected_ecu,
+                    "CONFIRMED",
+                    artifact=target.get("artifact"),
+                    firmware_sha256=target.get("sha256"),
+                    ok=True,
+                    details={
+                        "port": port,
+                        "active_slot": after_status["active_slot"],
+                        "target_slot": after_status["target_slot"],
+                    },
+                )
+
                 return {
                     "ok": True,
                     "skipped": False,
@@ -739,12 +822,124 @@ class Installer:
                 }
 
         except Exception as e:
+            self.secondary_states.transition(
+                expected_ecu,
+                "FAILED",
+                artifact=target.get("artifact") if target else None,
+                firmware_sha256=target.get("sha256") if target else None,
+                ok=False,
+                reason=str(e),
+                details={"port": port},
+            )
             print(f"[FAIL] Serial firmware installation failed: {e}")
             return {
                 "ok": False,
                 "skipped": False,
+                "ecu_serial": expected_ecu,
                 "reason": str(e),
             }
+
+    def install_serial_firmware(self, downloaded_results: List) -> dict:
+        from .secondary_serial import SecondarySerial
+
+        fixed_order = [
+            "stm32-led-001",
+            "stm32-led-002",
+            "stm32-led-003",
+        ]
+
+        target_ids = {
+            item.get("ecu_serial")
+            for item in downloaded_results
+            if item.get("status") == "OK"
+            and item.get("file_type") == "bin"
+        }
+
+        discovered = SecondarySerial.discover_secondaries()
+        results = []
+
+        for expected_ecu in fixed_order:
+            # 이번 metadata에 없는 ECU는 업데이트하지 않음
+            if expected_ecu not in target_ids:
+                continue
+
+            secondary_info = discovered.get(expected_ecu)
+
+            # 현재 ECU에 대응하는 검증 완료 펌웨어 정보 검색
+            artifact_info = next(
+                (
+                    item
+                    for item in downloaded_results
+                    if item.get("ecu_serial") == expected_ecu
+                    and item.get("status") == "OK"
+                    and item.get("file_type") == "bin"
+                ),
+                {},
+            )
+
+            # metadata에는 대상이 있지만 실제 보드가 검색되지 않은 경우
+            if secondary_info is None:
+                self.secondary_states.transition(
+                    expected_ecu,
+                    "OFFLINE",
+                    artifact=artifact_info.get("artifact"),
+                    firmware_sha256=artifact_info.get("sha256"),
+                    ok=False,
+                    reason="OFFLINE",
+                )
+
+                results.append({
+                    "ok": False,
+                    "skipped": False,
+                    "ecu_serial": expected_ecu,
+                    "reason": "OFFLINE",
+                })
+                continue
+
+            # 검색된 ECU의 실제 시리얼 포트
+            port = secondary_info["port"]
+
+            # 업데이트를 시작할 수 있는 연결 상태 기록
+            self.secondary_states.transition(
+                expected_ecu,
+                "READY",
+                artifact=artifact_info.get("artifact"),
+                firmware_sha256=artifact_info.get("sha256"),
+                ok=None,
+                details={
+                    "port": port,
+                    "active_slot": (
+                        secondary_info["status"]["active_slot"]
+                    ),
+                    "target_slot": (
+                        secondary_info["status"]["target_slot"]
+                    ),
+                    "ready": (
+                        secondary_info["status"]["ready"]
+                    ),
+                },
+            )
+
+            print(
+                f"[Primary ECU] Fixed-order update: "
+                f"ECU={expected_ecu}, PORT={port}"
+            )
+
+            result = self._install_one_serial_firmware(
+                downloaded_results=downloaded_results,
+                expected_ecu=expected_ecu,
+                port=port,
+            )
+
+            results.append(result)
+
+        return {
+            "ok": bool(results) and all(
+                result.get("ok", False) for result in results
+            ),
+            "skipped": not bool(results),
+            "results": results,
+        }
 
 
     def download_config_to_secondary(self, update_images: List, base_url: str) -> dict:
