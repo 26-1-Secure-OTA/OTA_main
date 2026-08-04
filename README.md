@@ -169,3 +169,49 @@ Prime ECU 실행과 동시에 다운로드가 진행되며, Prime ECU에서 전�
 
 ------------------------------------------------------------------------
 
+## STM32 A/B 슬롯 펌웨어 배포
+
+STM32 펌웨어를 배포할 때는 동일한 소스와 동일한 버전으로 빌드한
+A/B 바이너리 두 개가 모두 필요합니다. 두 바이너리는 링커 시작 주소와
+벡터 테이블 위치만 다릅니다.
+
+```text
+stm32-led-001_1.2.0_slot_a.bin
+stm32-led-001_1.2.0_slot_b.bin
+```
+
+A/B 파일을 모두 `OTA_Director_Server/src_add/stage`에 복사합니다.
+watchdog는 Cortex-M 벡터 테이블을 검사하고, 서명된 targets 메타데이터에
+`custom.target_slot`을 기록하며, A/B 파일을 서로 다른 target으로 관리합니다.
+Director는 동일한 버전의 A/B 파일이 모두 준비된 경우에만 해당 슬롯 펌웨어를
+업데이트 대상으로 공개합니다.
+
+업데이트할 때 Primary는 다음 순서로 동작합니다.
+
+1. Director와 Image Repository의 메타데이터를 검증합니다.
+2. STM32 Secondary에 `STATUS_REQ`를 전송합니다.
+3. 현재 실행 중인 `ACTIVE` 슬롯과 비활성 `TARGET` 슬롯을 확인합니다.
+4. `TARGET` 슬롯에 맞는 서명된 펌웨어만 다운로드합니다.
+5. 메타데이터 슬롯, 파일명 슬롯, 바이너리의 Reset_Handler 주소를 교차검증합니다.
+6. 펌웨어 전송 직전에 Secondary 상태를 다시 확인하고, 슬롯이 변경되었으면 설치를 중단합니다.
+7. 펌웨어를 전송한 후 대상 슬롯이 활성 슬롯으로 변경되었는지 확인합니다.
+
+예를 들어 Secondary가 `ACTIVE=A,TARGET=B`를 보고하면 Primary는
+`stm32-led-001_<version>_slot_b.bin` 파일만 요청합니다. A/B 파일 중 하나만
+업로드되었거나 두 파일의 버전이 일치하지 않으면 해당 펌웨어는 차량에
+업데이트 대상으로 제공되지 않습니다.
+
+### Git 클론 후 키 복사
+
+보안을 위해 개인키가 들어 있는 `keys` 디렉터리는 Git에 커밋되지 않으므로,
+저장소를 클론해도 `OTA_Director_Server/keys`에 키가 생성되지 않습니다.
+별도로 보관한 `Director/keys` 디렉터리를 다음 위치로 복사해야 합니다.
+
+```text
+Director/keys  →  OTA_Director_Server/keys
+```
+
+두 디렉터리에는 동일한 `targets`, `snapshot`, `timestamp` 키 쌍이 있어야
+합니다. 기존 `root.json`의 공개키 정보와 일치해야 하므로 새 키를 임의로
+생성하지 말고, 기존 키를 안전한 방법으로 복사해서 사용합니다. 개인키는
+GitHub에 커밋하지 않습니다.

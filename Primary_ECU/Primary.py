@@ -286,7 +286,20 @@ class PrimeEcuHandler:
                     "Download verified ECU artifacts"
                 )
 
-                artifact_updates = update_images
+                try:
+                    selection = self.installer.select_updates_for_secondary(
+                        update_images
+                    )
+                except Exception as exc:
+                    print(f"[FAIL] Secondary target selection failed: {exc}")
+                    self.reporter.report(
+                        "secondary_target_selection_failed",
+                        {"reason": str(exc)},
+                    )
+                    return
+
+                artifact_updates = selection["updates"]
+                secondary_statuses = selection["secondary_statuses"]
 
                 if not artifact_updates:
                     print(
@@ -324,7 +337,10 @@ class PrimeEcuHandler:
                 # 001 → 002 → 003 고정 순서 설치
                 install_result = (
                     self.installer.install_serial_firmware(
-                        download_result["results"]
+                        download_result["results"],
+                        expected_secondary_statuses=(
+                            secondary_statuses
+                        ),
                     )
                 )
 

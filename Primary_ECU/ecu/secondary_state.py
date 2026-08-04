@@ -38,8 +38,9 @@ class SecondaryStateStore:
             return None
 
         match = re.search(
-            r"_(\d+(?:\.\d+)*)\.[^.]+$",
+            r"_(\d+(?:\.\d+)*)(?:_slot[-_][ab])?\.[^.]+$",
             Path(artifact).name,
+            re.IGNORECASE,
         )
         return match.group(1) if match else None
 

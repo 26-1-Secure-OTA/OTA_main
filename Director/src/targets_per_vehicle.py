@@ -18,14 +18,23 @@ ROOT_JSON_PATH = DIRECTOR_METADATA_DIR / "root.json"
 # ---------------------------------------------------------------------------
 
 _RX_IMAGE_ID = re.compile(
-    r"^(?P<name>.+?)_(?P<ver>\d+(?:\.\d+)*)(?:\.[^.]+)?$"
+    r"^(?P<name>.+?)_(?P<ver>\d+(?:\.\d+)*)"
+    r"(?:_slot[-_](?P<slot>[abAB]))?(?:\.[^.]+)?$"
 )
 
-def split_image_id(image_id: str) -> Optional[Tuple[str, str]]:
+def split_image_id(
+    image_id: str,
+) -> Optional[Tuple[str, str, Optional[str]]]:
+    """Split an image ID into logical ECU name, version, and slot."""
     m = _RX_IMAGE_ID.match(image_id)
     if not m:
         return None
-    return m.group("name"), m.group("ver")
+    slot_raw = m.group("slot")
+    return (
+        m.group("name"),
+        m.group("ver"),
+        slot_raw.upper() if slot_raw else None,
+    )
 
 def _split_ver(ver: str) -> List[int]:
     return [int(x) for x in ver.split(".")]
@@ -116,7 +125,7 @@ def extract_installed_list_from_vvm(vvm_raw: Dict[str, Any]) -> List[Dict[str, A
         sv = split_image_id(image_fname)
         if not sv:
             continue
-        name, ver = sv
+        name, ver, target_slot = sv
 
         # image_info는 hashes + length 정도만 추려서 사용
         fileinfo = img_obj.get("fileinfo") or {}
@@ -141,6 +150,7 @@ def extract_installed_list_from_vvm(vvm_raw: Dict[str, Any]) -> List[Dict[str, A
             "image_id": image_name,
             "name": name,
             "version": ver,
+            "target_slot": target_slot,
             "image_info": image_info,
         })
 
@@ -153,11 +163,14 @@ def extract_installed_list_from_vvm(vvm_raw: Dict[str, Any]) -> List[Dict[str, A
 #    반환: {name: (best_image_id, best_version, image_info)}
 # ---------------------------------------------------------------------------
 
-def build_latest_map_from_global(global_targets: Dict[str, Any]) -> Dict[str, Tuple[str, str, Dict[str, Any]]]:
-    """
-    name 별(예: 'ivi', 'cluster')로 가장 높은 버전의 이미지를 뽑는다.
-    """
-    out: Dict[str, Tuple[str, str, Dict[str, Any]]] = {}
+def build_latest_map_from_global(
+    global_targets: Dict[str, Any],
+) -> Dict[Tuple[str, Optional[str]], Tuple[str, str, Dict[str, Any]]]:
+    """Return the newest artifact for each logical ECU and physical slot."""
+    out: Dict[
+        Tuple[str, Optional[str]],
+        Tuple[str, str, Dict[str, Any]],
+    ] = {}
     signed = global_targets.get("signed") or {}
     targets_obj = signed.get("targets") or {}
 
@@ -170,17 +183,51 @@ def build_latest_map_from_global(global_targets: Dict[str, Any]) -> Dict[str, Tu
         sv = split_image_id(image_id)
         if not sv:
             continue
-        name, ver = sv
+        name, ver, target_slot = sv
+        metadata_slot = (info.get("custom") or {}).get("target_slot")
+        if metadata_slot is not None:
+            metadata_slot = str(metadata_slot).upper()
+            if metadata_slot not in ("A", "B"):
+                continue
+            if target_slot is not None and metadata_slot != target_slot:
+                continue
+            target_slot = metadata_slot
 
-        prev = out.get(name)
+        key = (name, target_slot)
+        prev = out.get(key)
         if not prev:
-            out[name] = (image_id, ver, info)
+            out[key] = (image_id, ver, info)
         else:
             _, prev_ver, _ = prev
             if version_gt(ver, prev_ver):
-                out[name] = (image_id, ver, info)
+                out[key] = (image_id, ver, info)
 
     return out
+
+
+def select_release_candidates(
+    latest_map: Dict[
+        Tuple[str, Optional[str]],
+        Tuple[str, str, Dict[str, Any]],
+    ],
+    image_name: str,
+) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """Select one generic artifact or one complete A/B firmware pair."""
+    generic = latest_map.get((image_name, None))
+    slot_a = latest_map.get((image_name, "A"))
+    slot_b = latest_map.get((image_name, "B"))
+
+    if slot_a is not None or slot_b is not None:
+        if slot_a is None or slot_b is None or slot_a[1] != slot_b[1]:
+            print(
+                f"[Director] Wait for complete A/B firmware pair: "
+                f"ECU={image_name}, A={slot_a and slot_a[1]}, "
+                f"B={slot_b and slot_b[1]}"
+            )
+            return []
+        return [slot_a, slot_b]
+
+    return [generic] if generic is not None else []
 
 # ---------------------------------------------------------------------------
 # 3) 청크 manifest 로딩 / required_chunks 계산
@@ -279,48 +326,41 @@ def make_targets_for_car(vvm_raw: Dict[str, Any], global_targets: Dict[str, Any]
         cur_ver    = installed["version"]
         # cur_info = installed["image_info"]  # 필요하면 사용
 
-        latest = latest_map.get(img_name)
-        if not latest:
-            # 이 ECU의 이미지 name 에 대해 global targets 에 정보가 없으면 스킵
+        candidates = select_release_candidates(latest_map, img_name)
+        if not candidates:
             continue
 
-        best_img_id, best_ver, best_info = latest
+        for best_img_id, best_ver, best_info in candidates:
+            try:
+                need_update = version_gt(best_ver, cur_ver)
+            except Exception:
+                continue
 
-        # 버전 비교만 사용 (해시 비교는 요구사항대로 제외)
-        try:
-            need_update = version_gt(best_ver, cur_ver)
-        except Exception:
-            # 버전 파싱 실패하면 그냥 스킵하는 쪽으로
-            continue
+            if not need_update:
+                print("[Director] This vehicle does not need an update")
+                continue
 
-        if not need_update:
-            print("[Director] This vehicle don't need an update")
-            continue
+            try:
+                required_chunks = compute_required_chunks(
+                    ecu=ecu_id,
+                    image_name=img_name,
+                    old_image_id=cur_img_id,
+                    new_image_id=best_img_id,
+                )
+            except FileNotFoundError:
+                required_chunks = []
 
-        any_update = True
+            per_ecu_entries.append({
+                "ecu": ecu_id,
+                "images": {
+                    "image_name": best_img_id,
+                    "image_info": best_info,
+                    "required_chunks": required_chunks,
+                }
+            })
+            any_update = True
 
-        # required_chunks 계산
-        try:
-            required_chunks = compute_required_chunks(
-                ecu=ecu_id,
-                image_name=img_name,
-                old_image_id=cur_img_id,
-                new_image_id=best_img_id,
-            )
-        except FileNotFoundError:
-            # manifest 가 없으면 일단 빈 리스트 반환 (필요하면 나중에 로직 보강)
-            required_chunks = []
-
-        per_ecu_entries.append({
-            "ecu": ecu_id,
-            "images": {
-                "image_name": best_img_id,
-                "image_info": best_info,
-                "required_chunks": required_chunks,
-            }
-        })
-
-    # 만료 시간 / 버전은 간단하게 고정 전략 사용
+    # Metadata expiration/version policy.
     now = datetime.now(timezone.utc)
     expires_str = (now + timedelta(days=TARGETS_EXPIRES_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     version = 1  # 필요하면 파일 탐색해서 증가시키는 로직 추가 가능
@@ -373,34 +413,29 @@ def make_uptane_targets_for_car(vvm_raw: Dict[str, Any], global_targets: Dict[st
         cur_ver    = installed["version"]
         # cur_info = installed["image_info"]  # 필요하면 사용
 
-        latest = latest_map.get(img_name)
-        if not latest:
-            # 이 ECU의 이미지 name 에 대해 global targets 에 정보가 없으면 스킵
+        candidates = select_release_candidates(latest_map, img_name)
+        if not candidates:
             continue
 
-        best_img_id, best_ver, best_info = latest
+        for best_img_id, best_ver, best_info in candidates:
+            try:
+                need_update = version_gt(best_ver, cur_ver)
+            except Exception:
+                continue
 
-        # 버전 비교만 사용 (해시 비교는 요구사항대로 제외)
-        try:
-            need_update = version_gt(best_ver, cur_ver)
-        except Exception:
-            # 버전 파싱 실패하면 그냥 스킵하는 쪽으로
-            continue
+            if not need_update:
+                continue
 
-        if not need_update:
-            continue
+            per_ecu_entries.append({
+                "ecu": ecu_id,
+                "images": {
+                    "image_name": best_img_id,
+                    "image_info": best_info,
+                }
+            })
+            any_update = True
 
-        any_update = True
-
-        per_ecu_entries.append({
-            "ecu": ecu_id,
-            "images": {
-                "image_name": best_img_id,
-                "image_info": best_info
-            }
-        })
-
-    # 만료 시간 / 버전은 간단하게 고정 전략 사용
+    # Metadata expiration/version policy.
     now = datetime.now(timezone.utc)
     expires_str = (now + timedelta(days=TARGETS_EXPIRES_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     version = 1  # 필요하면 파일 탐색해서 증가시키는 로직 추가 가능

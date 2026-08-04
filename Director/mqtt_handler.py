@@ -69,5 +69,5 @@ class MQTTBus:
 
     def publish_meta(self, topic: str, role: str, data: dict):
         payload = json.dumps(data, separators=(",", ":"))
-        self.client.publish(topic, payload, qos=1, retain=True)
+        self.client.publish(topic, payload, qos=1, retain=False)
         log.info(f"Published {role} to {topic}")
