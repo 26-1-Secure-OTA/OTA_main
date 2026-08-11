@@ -17,7 +17,7 @@ from ecu import (
 )
 
 
-BROKER = "10.147.21.240"
+BROKER = "172.20.10.2"
 PORT = 8883
 
 TOPIC_NOTIFY_VERSION = "primary/version"
