@@ -46,11 +46,7 @@ fs_root/
 
 
 # Keys & Certificates 
-keys/
-root_keys/
-*.pem
-*.crt
-*.key
+
 
 
 # MQTT / TLS / Secret
@@ -61,5 +57,6 @@ root_keys/
 
 # Runtime Generated Data
 Primary_ECU/downloads/
-OTA_Director_Server/src_add/stage/*
-!OTA_Director_Server/src_add/stage/.gitkeep
+
+
+*:Zone.Identifier
