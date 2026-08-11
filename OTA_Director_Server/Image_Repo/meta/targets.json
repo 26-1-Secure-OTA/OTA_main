@@ -2,91 +2,91 @@
   "signatures": [
     {
       "keyid": "507b54e2b4b3606dd011a9455f9fbc043b8cb71d9601e9b8d449aafab48bf10d",
-      "sig": "4818405a905c05924c6f2c57b5f3a77808ef94da59f2365f008358dd5236f9b8462b8dae7a2e6a810ec24b8101d59c3945fb970de4a27a7cf31db12e28d0c70b"
+      "sig": "7f8c6da2fa7adb23c4bf027e4ae1f8bc630b1fb775255b590006c8c3505bfb1a641f25cfc3b888df3d86f0c67e637b28235ba92439f5c476b57d851c2e0d140c"
     }
   ],
   "signed": {
     "_type": "targets",
     "spec_version": "1.0.0",
-    "version": 25,
-    "expires": "2027-08-10T15:02:57Z",
+    "version": 31,
+    "expires": "2027-08-11T07:21:56Z",
     "targets": {
-      "stm32-led-003_1.8.0_slot_b": {
+      "stm32-led-001_1.9.0_slot_a": {
         "hashes": {
-          "sha256": "53b491fc0d9bceb8bc0b494ee7cd4a67e4c7de88cd35f2075704b7a2d9c439f0",
-          "sha512": "9007311d060b6b6d4ff0e8bb0002f01e62684d5f7b92cedccd0c24c157f67d0324c714eb4031bb69be3eb35a7868ea51bd0be8b14501607995812eaf79d6532a"
-        },
-        "length": 12292,
-        "custom": {
-          "artifact_type": "firmware",
-          "ecu": "stm32-led-003",
-          "version": "1.8.0",
-          "target_slot": "B"
-        }
-      },
-      "stm32-led-001_1.8.0_slot_a": {
-        "hashes": {
-          "sha256": "c3b5bb65085c25f408f89be9782911808786c61fa5363c3f80a3f71ee89a992f",
-          "sha512": "c0c60bec10c622bc22043238df374ca92fa3425b1b19f7bc02da2eaf4228ebf3e16efd9cb53809ca181791aee345aa5405eacea12aec76aa687641048f44e363"
+          "sha256": "f9e9e8b20db67b3a24e4e21c4d86d43568a5b05989736bd8be03a1e152552ddd",
+          "sha512": "2be0edd569a6834413cbd326276cd7260969ad16c8955cf34b16db52175069cc23f57aa955d5418340e2eaebc673ddfc129a36f54f86bb5acba24ac9417f9d59"
         },
         "length": 12288,
         "custom": {
           "artifact_type": "firmware",
           "ecu": "stm32-led-001",
-          "version": "1.8.0",
+          "version": "1.9.0",
           "target_slot": "A"
         }
       },
-      "stm32-led-001_1.8.0_slot_b": {
+      "stm32-led-001_1.9.0_slot_b": {
         "hashes": {
-          "sha256": "dc19311b60d48b315f21ecbb9efd37821f6a792c805496d7bbe2c37dad34e04f",
-          "sha512": "0911ae5db9f58f54ae7e7022c9f1ddd4acfc45304ffecf9725e26dadc42dce0c7deacffe23de81fa2a8e88e7f8931f4c32a7a30b881dcfd03eb40898c0ab55a6"
+          "sha256": "9c09d627b65397e50259b760aaf57f7ab4d41d0087f7cc2788fd543f7e3f7007",
+          "sha512": "57c824c34101c7aeb06836506dd8b1c7a06799a20a81802b9d789b8d4c96a096a0ec800eb3f69a2f315e3e627ca570a707eda45fc95c15f376173d09cc39f81e"
         },
         "length": 12292,
         "custom": {
           "artifact_type": "firmware",
           "ecu": "stm32-led-001",
-          "version": "1.8.0",
+          "version": "1.9.0",
           "target_slot": "B"
         }
       },
-      "stm32-led-002_1.8.0_slot_a": {
+      "stm32-led-002_1.9.0_slot_a": {
         "hashes": {
-          "sha256": "5f98a4b384f38532ae6fb9206118777decfc52fcbf2072a7e86389651da13f80",
-          "sha512": "ea3412ae0217fc643ecc072c939b36d851f3398379f2a634d6cbbd78762704a300e9c4a26a8a4bdd866a5dbb6a25f5d0adee02a654e10edc5e1b695a4ba1991f"
+          "sha256": "0a59501b0e04da7834caf681f4beccda39d3967c832ca3c9b106865b01cdcebe",
+          "sha512": "3f43b856b8d43a9020924586faaaa799c5827c30ef7a717b9988ec17cbb329727b9c08d48a2243a534decc73ed73cdd4125d707dea2243dde772b8bc96c3a7bc"
         },
         "length": 12288,
         "custom": {
           "artifact_type": "firmware",
           "ecu": "stm32-led-002",
-          "version": "1.8.0",
+          "version": "1.9.0",
           "target_slot": "A"
         }
       },
-      "stm32-led-002_1.8.0_slot_b": {
+      "stm32-led-002_1.9.0_slot_b": {
         "hashes": {
-          "sha256": "4b05ff0cc71ee1ed981f0e83aba7b492c40aa5b25b4c1edb852bc17b4ff088b9",
-          "sha512": "bc480c3c211ed0b3e9e4bd4a1116514ab87f6131d2cd11f49de1f215c4357606199e9b25d76656c976be0c7075a826898ec4fd6847811eb31cf3e9a5aacc31cf"
+          "sha256": "0cd4187b2986b3b6b05dd175e24580421fb43ee475aab97971797a69b2216751",
+          "sha512": "33133a9b6a86a898ac613d38ab618e3e2246c52bfe180bcd49053d83f9edbaa21dc713e48f9ef208ff75ae4be8cae8303d4bc5a7a148d272035f4afdc0ff0c55"
         },
         "length": 12292,
         "custom": {
           "artifact_type": "firmware",
           "ecu": "stm32-led-002",
-          "version": "1.8.0",
+          "version": "1.9.0",
           "target_slot": "B"
         }
       },
-      "stm32-led-003_1.8.0_slot_a": {
+      "stm32-led-003_1.9.0_slot_a": {
         "hashes": {
-          "sha256": "120b55f7f8132f6f99fcac27f4e817f63032eed73eab87b7f24d5eaa70768f6e",
-          "sha512": "56fe4fc6eff06f71d282525666c3f0c3bfa2e5c264903f231d18706aa36d786b01db0d778655656fb2a31aceed77e1ca6b7998bcdf744a7648ac4f4885cc17e9"
+          "sha256": "e8f3a6584a8008e8dcde21345f5c19aeff1f9811d422ac04390c42945d9d755c",
+          "sha512": "9b94889d03dc2ed4e820b858ad939208fe505871f26ca91678904f8aa3cc3d245e2e756111e0aa0f3a7324ab6d4759498bedac9e1504697972f7db8cd42b13a4"
         },
         "length": 12288,
         "custom": {
           "artifact_type": "firmware",
           "ecu": "stm32-led-003",
-          "version": "1.8.0",
+          "version": "1.9.0",
           "target_slot": "A"
+        }
+      },
+      "stm32-led-003_1.9.0_slot_b": {
+        "hashes": {
+          "sha256": "a4ddb329bc5f7f65239af89fca61beaad15ff167bbfccef38e7f3cdc54f00609",
+          "sha512": "09c69f2f6d7381ab1049f68e62e4002a8dbb623ed28abc80957e9e2b28ffdda0642fa92ddb24209d0fd66c3011b5ba123e657058a0c9052f653d99e31d3ddfc9"
+        },
+        "length": 12292,
+        "custom": {
+          "artifact_type": "firmware",
+          "ecu": "stm32-led-003",
+          "version": "1.9.0",
+          "target_slot": "B"
         }
       }
     },

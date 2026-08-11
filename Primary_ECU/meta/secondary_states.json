@@ -1,50 +1,50 @@
 {
   "stm32-led-001": {
-    "artifact": "stm32-led-001_1.8.0_slot_a.bin",
+    "artifact": "stm32-led-001_1.0.1.bin",
     "details": {
-      "active_slot": "A",
+      "active_slot": "B",
       "port": "/dev/ttyACM2",
-      "target_slot": "B"
+      "target_slot": "A"
     },
     "ecu_serial": "stm32-led-001",
-    "firmware_sha256": "c3b5bb65085c25f408f89be9782911808786c61fa5363c3f80a3f71ee89a992f",
-    "firmware_version": "1.8.0",
+    "firmware_sha256": "8750ea28f7b59d8038faade3279047c50fb28c1e046a467eece8a9a24faf7516",
+    "firmware_version": "1.0.1",
     "ok": true,
     "reason": null,
     "retry_count": 0,
     "state": "CONFIRMED",
-    "updated_at": "2026-08-10T15:03:26Z"
+    "updated_at": "2026-08-02T12:46:37Z"
   },
   "stm32-led-002": {
-    "artifact": "stm32-led-002_1.8.0_slot_a.bin",
+    "artifact": "stm32-led-002_1.0.1.bin",
     "details": {
-      "active_slot": "A",
+      "active_slot": "B",
       "port": "/dev/ttyACM0",
-      "target_slot": "B"
+      "target_slot": "A"
     },
     "ecu_serial": "stm32-led-002",
-    "firmware_sha256": "5f98a4b384f38532ae6fb9206118777decfc52fcbf2072a7e86389651da13f80",
-    "firmware_version": "1.8.0",
+    "firmware_sha256": "9a92459982680457833d6bc7ae8464fe488c667d0eed58b0954e2424f9b9f1b3",
+    "firmware_version": "1.0.1",
     "ok": true,
     "reason": null,
     "retry_count": 0,
     "state": "CONFIRMED",
-    "updated_at": "2026-08-10T15:03:35Z"
+    "updated_at": "2026-08-02T12:46:44Z"
   },
   "stm32-led-003": {
-    "artifact": "stm32-led-003_1.8.0_slot_a.bin",
+    "artifact": "stm32-led-003_1.0.1.bin",
     "details": {
-      "active_slot": "A",
+      "active_slot": "B",
       "port": "/dev/ttyACM1",
-      "target_slot": "B"
+      "target_slot": "A"
     },
     "ecu_serial": "stm32-led-003",
-    "firmware_sha256": "120b55f7f8132f6f99fcac27f4e817f63032eed73eab87b7f24d5eaa70768f6e",
-    "firmware_version": "1.8.0",
+    "firmware_sha256": "92da445d1205502dff651219c0b26e8112d425f4b29c94c55dd7cdd2e43f4c93",
+    "firmware_version": "1.0.1",
     "ok": true,
     "reason": null,
     "retry_count": 0,
     "state": "CONFIRMED",
-    "updated_at": "2026-08-10T15:03:44Z"
+    "updated_at": "2026-08-02T12:46:53Z"
   }
 }
