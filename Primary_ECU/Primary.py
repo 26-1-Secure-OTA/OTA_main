@@ -17,7 +17,11 @@ from ecu import (
 )
 
 
+<<<<<<< HEAD
 BROKER = "172.20.10.2"
+=======
+BROKER = "172.20.10.7"
+>>>>>>> a266665 (Update three STM32 OTA configuration)
 PORT = 8883
 
 TOPIC_NOTIFY_VERSION = "primary/version"

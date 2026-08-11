@@ -275,7 +275,11 @@ if __name__ == "__main__":
     # ).start()
     print("[Main] new_chunks watcher started")
 
+<<<<<<< HEAD
     MQTT_BROKER = "172.20.10.2"
+=======
+    MQTT_BROKER = "172.20.10.7"
+>>>>>>> a266665 (Update three STM32 OTA configuration)
     MQTT_PORT = 8883
     WATCH_DIR = "../Image_Repo/meta"
     files_path = "./data/update_image.tar.xz"
