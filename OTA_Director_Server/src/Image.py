@@ -275,7 +275,7 @@ if __name__ == "__main__":
     # ).start()
     print("[Main] new_chunks watcher started")
 
-    MQTT_BROKER = "172.20.10.2"
+    MQTT_BROKER = "10.147.21.240"
     MQTT_PORT = 8883
     WATCH_DIR = "../Image_Repo/meta"
     files_path = "./data/update_image.tar.xz"
