@@ -14,7 +14,11 @@ import serial
 
 DEFAULT_BAUDRATE = 115200
 DEFAULT_PORT = "/dev/ttyACM0"
+
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+UID_PATTERN = re.compile(r"^[0-9a-fA-F]{24}$")
+VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
+
 
 # NUCLEO-F103RB flash layout used by this OTA demo.
 SLOT_A_START = 0x08004000
@@ -38,12 +42,12 @@ class SecondarySerial:
 
     There is no FW_END message because the STM32 already knows the exact size.
     """
+
     EXPECTED_SECONDARIES = {
         "stm32-led-001",
         "stm32-led-002",
         "stm32-led-003",
     }
-
 
     @staticmethod
     def discover_secondaries() -> dict:
@@ -62,11 +66,16 @@ class SecondarySerial:
                     read_timeout=0.5,
                     open_delay=2.0,
                 ) as secondary:
-                    status = secondary.get_status(timeout_seconds=5.0)
+                    status = secondary.get_status(
+                        timeout_seconds=5.0
+                    )
 
                 ecu_serial = status["ecu_serial"]
 
-                if ecu_serial not in SecondarySerial.EXPECTED_SECONDARIES:
+                if (
+                    ecu_serial
+                    not in SecondarySerial.EXPECTED_SECONDARIES
+                ):
                     print(
                         f"[DISCOVERY] Unknown Secondary: "
                         f"ECU={ecu_serial}, PORT={port}"
@@ -87,11 +96,17 @@ class SecondarySerial:
                     f"[DISCOVERY] ECU={ecu_serial}, "
                     f"PORT={port}, "
                     f"ACTIVE={status['active_slot']}, "
-                    f"TARGET={status['target_slot']}"
+                    f"TARGET={status['target_slot']}, "
+                    f"UID={status.get('uid')}, "
+                    f"VER={status.get('version')}, "
+                    f"HEALTH={status.get('health')}, "
+                    f"RESPONSE={status.get('link_response_ms')}ms"
                 )
 
             except Exception as exc:
-                print(f"[DISCOVERY] Failed on {port}: {exc}")
+                print(
+                    f"[DISCOVERY] Failed on {port}: {exc}"
+                )
 
         return discovered
 
@@ -103,7 +118,14 @@ class SecondarySerial:
         write_timeout: float = 10.0,
         open_delay: float = 2.0,
     ) -> None:
-        self.port = port or os.environ.get("STM32_PORT", DEFAULT_PORT)
+        self.port = (
+            port
+            or os.environ.get(
+                "STM32_PORT",
+                DEFAULT_PORT,
+            )
+        )
+
         self.baudrate = baudrate
 
         self.ser = serial.Serial(
@@ -125,7 +147,10 @@ class SecondarySerial:
         digest = hashlib.sha256()
 
         with path.open("rb") as firmware_file:
-            for data in iter(lambda: firmware_file.read(1024 * 1024), b""):
+            for data in iter(
+                lambda: firmware_file.read(1024 * 1024),
+                b"",
+            ):
                 digest.update(data)
 
         return digest.hexdigest()
@@ -136,155 +161,438 @@ class SecondarySerial:
         timeout_seconds: float,
     ) -> str:
         """Wait for the next decoded line beginning with ``prefix``."""
-        deadline = time.monotonic() + timeout_seconds
+
+        deadline = (
+            time.monotonic()
+            + timeout_seconds
+        )
+
         original_timeout = self.ser.timeout
 
         try:
             while time.monotonic() < deadline:
-                remaining = deadline - time.monotonic()
-                self.ser.timeout = min(0.5, max(remaining, 0.01))
+                remaining = (
+                    deadline
+                    - time.monotonic()
+                )
+
+                self.ser.timeout = min(
+                    0.5,
+                    max(
+                        remaining,
+                        0.01,
+                    ),
+                )
 
                 raw_line = self.ser.readline()
+
                 if not raw_line:
                     continue
 
-                line = raw_line.decode("utf-8", errors="ignore").strip()
+                line = (
+                    raw_line
+                    .decode(
+                        "utf-8",
+                        errors="ignore",
+                    )
+                    .strip()
+                )
+
                 if not line:
                     continue
 
-                print(f"[STM32 -> Primary] {line}")
+                print(
+                    f"[STM32 -> Primary] {line}"
+                )
 
                 # Ignore boot banners or unrelated debug messages.
                 if line.startswith(prefix):
                     return line
 
         finally:
-            self.ser.timeout = original_timeout
+            self.ser.timeout = (
+                original_timeout
+            )
 
         return ""
 
-    def _wait_for_fw_response(self, timeout_seconds: float) -> str:
-        return self._wait_for_line_prefix("FW_", timeout_seconds)
+    def _wait_for_fw_response(
+        self,
+        timeout_seconds: float,
+    ) -> str:
+        return self._wait_for_line_prefix(
+            "FW_",
+            timeout_seconds,
+        )
 
-    def get_status(self, timeout_seconds: float = 5.0) -> dict:
-        """Ask the running STM32 application which slot should be updated.
+    @staticmethod
+    def parse_status_response(
+        response: str,
+    ) -> dict:
+        parts = (
+            response
+            .strip()
+            .split(",")
+        )
 
-        Expected response example::
-
-            STATUS,stm32-led-001,ACTIVE=B,TARGET=A,READY=1,MAX=49152
-        """
-        self.ser.reset_input_buffer()
-
-        request = b"STATUS_REQ\n"
-        print("[Primary -> STM32] STATUS_REQ")
-
-        written = self.ser.write(request)
-        if written != len(request):
+        if len(parts) < 2:
             raise FirmwareTransferError(
-                f"STATUS_REQ write incomplete: expected={len(request)}, "
-                f"written={written}"
+                "invalid STM32 STATUS response: "
+                f"{response}"
             )
 
-        self.ser.flush()
-        response = self._wait_for_line_prefix("STATUS,", timeout_seconds)
-
-        if not response:
-            raise FirmwareTransferError("STM32 STATUS response timeout")
-
-        parts = response.split(",")
-        if len(parts) != 6 or parts[0] != "STATUS" or not parts[1]:
+        if (
+            parts[0] != "STATUS"
+            or not parts[1]
+        ):
             raise FirmwareTransferError(
-                f"invalid STM32 STATUS response: {response}"
+                "invalid STM32 STATUS response: "
+                f"{response}"
             )
 
         values = {}
+
         for field in parts[2:]:
             if "=" not in field:
                 raise FirmwareTransferError(
-                    f"invalid STM32 STATUS field: {field}"
+                    "invalid STM32 STATUS field: "
+                    f"{field}"
                 )
-            key, value = field.split("=", 1)
-            values[key] = value
+
+            key, value = field.split(
+                "=",
+                1,
+            )
+
+            values[key.strip()] = (
+                value.strip()
+            )
 
         try:
             active_slot = values["ACTIVE"]
             target_slot = values["TARGET"]
             ready_value = values["READY"]
-            max_size = int(values["MAX"])
-        except (KeyError, ValueError) as exc:
+            max_size = int(
+                values["MAX"]
+            )
+
+        except (
+            KeyError,
+            ValueError,
+        ) as exc:
             raise FirmwareTransferError(
-                f"invalid STM32 STATUS values: {response}"
+                "invalid STM32 STATUS values: "
+                f"{response}"
             ) from exc
 
-        if active_slot not in ("A", "B"):
+        if active_slot not in (
+            "A",
+            "B",
+        ):
             raise FirmwareTransferError(
-                f"invalid active slot in STATUS: {active_slot}"
+                "invalid active slot: "
+                f"{active_slot}"
             )
-        if target_slot not in ("A", "B") or target_slot == active_slot:
+
+        if (
+            target_slot not in (
+                "A",
+                "B",
+            )
+            or target_slot == active_slot
+        ):
             raise FirmwareTransferError(
-                f"invalid target slot in STATUS: {target_slot}"
+                "invalid target slot: "
+                f"{target_slot}"
             )
-        if ready_value not in ("0", "1"):
+
+        if ready_value not in (
+            "0",
+            "1",
+        ):
             raise FirmwareTransferError(
-                f"invalid READY value in STATUS: {ready_value}"
+                "invalid READY value: "
+                f"{ready_value}"
             )
+
         if max_size <= 0:
             raise FirmwareTransferError(
-                f"invalid MAX value in STATUS: {max_size}"
+                "invalid MAX value: "
+                f"{max_size}"
+            )
+
+        uid = values.get("UID")
+        version = values.get("VER")
+        uptime_value = values.get(
+            "UPTIME_MS"
+        )
+        reset_cause = values.get(
+            "RESET"
+        )
+        uart_error_value = values.get(
+            "UART_ERR"
+        )
+        health = values.get(
+            "HEALTH"
+        )
+
+        if (
+            uid is not None
+            and not UID_PATTERN.fullmatch(
+                uid
+            )
+        ):
+            raise FirmwareTransferError(
+                "invalid UID value: "
+                f"{uid}"
+            )
+
+        if (
+            version is not None
+            and not VERSION_PATTERN.fullmatch(
+                version
+            )
+        ):
+            raise FirmwareTransferError(
+                "invalid VER value: "
+                f"{version}"
+            )
+
+        try:
+            uptime_ms = (
+                int(uptime_value)
+                if uptime_value
+                is not None
+                else None
+            )
+
+            uart_error_count = (
+                int(uart_error_value)
+                if uart_error_value
+                is not None
+                else None
+            )
+
+        except ValueError as exc:
+            raise FirmwareTransferError(
+                "invalid numeric STATUS value: "
+                f"{response}"
+            ) from exc
+
+        if (
+            uptime_ms is not None
+            and uptime_ms < 0
+        ):
+            raise FirmwareTransferError(
+                "invalid UPTIME_MS value: "
+                f"{uptime_ms}"
+            )
+
+        if (
+            uart_error_count is not None
+            and uart_error_count < 0
+        ):
+            raise FirmwareTransferError(
+                "invalid UART_ERR value: "
+                f"{uart_error_count}"
+            )
+
+        valid_reset_causes = {
+            "POWER_ON",
+            "PIN_RESET",
+            "SOFTWARE",
+            "WATCHDOG",
+            "UNKNOWN",
+        }
+
+        if (
+            reset_cause is not None
+            and reset_cause
+            not in valid_reset_causes
+        ):
+            raise FirmwareTransferError(
+                "invalid RESET value: "
+                f"{reset_cause}"
+            )
+
+        valid_health_values = {
+            "OK",
+            "WARN",
+            "ERROR",
+        }
+
+        if (
+            health is not None
+            and health
+            not in valid_health_values
+        ):
+            raise FirmwareTransferError(
+                "invalid HEALTH value: "
+                f"{health}"
             )
 
         return {
             "ecu_serial": parts[1],
             "active_slot": active_slot,
             "target_slot": target_slot,
-            "ready": ready_value == "1",
+            "ready": (
+                ready_value == "1"
+            ),
             "max_size": max_size,
             "raw": response,
+            "uid": uid,
+            "version": version,
+            "uptime_ms": uptime_ms,
+            "reset_cause": reset_cause,
+            "uart_error_count": (
+                uart_error_count
+            ),
+            "health": health,
         }
 
+    def get_status(
+        self,
+        timeout_seconds: float = 5.0,
+    ) -> dict:
+        self.ser.reset_input_buffer()
+
+        request = b"STATUS_REQ\n"
+
+        print(
+            "[Primary -> STM32] STATUS_REQ"
+        )
+
+        started_at = time.monotonic()
+
+        written = self.ser.write(
+            request
+        )
+
+        if written != len(request):
+            raise FirmwareTransferError(
+                "STATUS_REQ write incomplete: "
+                f"expected={len(request)}, "
+                f"written={written}"
+            )
+
+        self.ser.flush()
+
+        response = (
+            self._wait_for_line_prefix(
+                "STATUS,",
+                timeout_seconds,
+            )
+        )
+
+        if not response:
+            raise FirmwareTransferError(
+                "STM32 STATUS response timeout"
+            )
+
+        status = (
+            self.parse_status_response(
+                response
+            )
+        )
+
+        status["link_response_ms"] = round(
+            (
+                time.monotonic()
+                - started_at
+            )
+            * 1000,
+            3,
+        )
+
+        return status
+
     @staticmethod
-    def detect_firmware_slot(firmware_path: str) -> str:
+    def detect_firmware_slot(
+        firmware_path: str,
+    ) -> str:
         """Determine whether a raw STM32 image was linked for Slot A or B.
 
         A Cortex-M image begins with the initial stack pointer and Reset_Handler
         vector. The Reset_Handler address must belong to the slot for which the
         application was linked.
         """
-        firmware = Path(firmware_path)
+
+        firmware = Path(
+            firmware_path
+        )
+
         if not firmware.is_file():
             raise FirmwareTransferError(
-                f"firmware file not found: {firmware}"
+                "firmware file not found: "
+                f"{firmware}"
             )
 
-        with firmware.open("rb") as firmware_file:
-            vector_table = firmware_file.read(8)
+        with firmware.open(
+            "rb"
+        ) as firmware_file:
+            vector_table = (
+                firmware_file.read(8)
+            )
 
         if len(vector_table) != 8:
             raise FirmwareTransferError(
-                f"firmware is too small to contain a vector table: {firmware}"
+                "firmware is too small to "
+                "contain a vector table: "
+                f"{firmware}"
             )
 
-        initial_sp, reset_vector = struct.unpack("<II", vector_table)
-        reset_handler = reset_vector & ~1
+        initial_sp, reset_vector = (
+            struct.unpack(
+                "<II",
+                vector_table,
+            )
+        )
 
-        # STM32F103RBT6 has 20 KiB SRAM. The initial SP may equal the first
-        # address immediately above SRAM (0x20005000).
-        if not (0x20000000 < initial_sp <= 0x20005000):
+        reset_handler = (
+            reset_vector
+            & ~1
+        )
+
+        # STM32F103RBT6 has 20 KiB SRAM.
+        # The initial SP may equal the first address immediately above SRAM.
+        if not (
+            0x20000000
+            < initial_sp
+            <= 0x20005000
+        ):
             raise FirmwareTransferError(
-                f"invalid initial stack pointer in firmware: 0x{initial_sp:08X}"
-            )
-        if (reset_vector & 1) == 0:
-            raise FirmwareTransferError(
-                f"Reset_Handler is not a Thumb address: 0x{reset_vector:08X}"
+                "invalid initial stack pointer "
+                "in firmware: "
+                f"0x{initial_sp:08X}"
             )
 
-        if SLOT_A_START <= reset_handler < SLOT_A_END:
+        if (
+            reset_vector
+            & 1
+        ) == 0:
+            raise FirmwareTransferError(
+                "Reset_Handler is not a Thumb "
+                "address: "
+                f"0x{reset_vector:08X}"
+            )
+
+        if (
+            SLOT_A_START
+            <= reset_handler
+            < SLOT_A_END
+        ):
             return "A"
-        if SLOT_B_START <= reset_handler < SLOT_B_END:
+
+        if (
+            SLOT_B_START
+            <= reset_handler
+            < SLOT_B_END
+        ):
             return "B"
 
         raise FirmwareTransferError(
-            "Reset_Handler is outside Slot A/B: "
+            "Reset_Handler is outside "
+            "Slot A/B: "
             f"0x{reset_handler:08X}"
         )
 
@@ -304,74 +612,156 @@ class SecondarySerial:
         ``io_buffer_size`` is only a local file/Serial buffer. It does not add
         sequence numbers, per-buffer ACKs, CRC frames, or a retry protocol.
         """
-        firmware = Path(firmware_path)
+
+        firmware = Path(
+            firmware_path
+        )
 
         if not firmware.is_file():
             raise FirmwareTransferError(
-                f"firmware file not found: {firmware}"
+                "firmware file not found: "
+                f"{firmware}"
             )
 
-        if firmware.suffix.lower() != ".bin":
+        if (
+            firmware.suffix.lower()
+            != ".bin"
+        ):
             raise FirmwareTransferError(
-                f"only .bin firmware is supported: {firmware.name}"
+                "only .bin firmware is "
+                "supported: "
+                f"{firmware.name}"
             )
 
         if io_buffer_size <= 0:
-            raise FirmwareTransferError("io_buffer_size must be positive")
-
-        expected_sha256 = expected_sha256.strip().lower()
-        if not SHA256_PATTERN.fullmatch(expected_sha256):
             raise FirmwareTransferError(
-                "expected_sha256 must be exactly 64 hexadecimal characters"
+                "io_buffer_size must be positive"
             )
 
-        firmware_size = firmware.stat().st_size
-        if firmware_size <= 0:
-            raise FirmwareTransferError("firmware file is empty")
+        expected_sha256 = (
+            expected_sha256
+            .strip()
+            .lower()
+        )
 
-        firmware_slot = self.detect_firmware_slot(str(firmware))
-        if expected_target_slot is not None:
-            expected_target_slot = expected_target_slot.upper()
-            if firmware_slot != expected_target_slot:
+        if not SHA256_PATTERN.fullmatch(
+            expected_sha256
+        ):
+            raise FirmwareTransferError(
+                "expected_sha256 must be exactly "
+                "64 hexadecimal characters"
+            )
+
+        firmware_size = (
+            firmware.stat().st_size
+        )
+
+        if firmware_size <= 0:
+            raise FirmwareTransferError(
+                "firmware file is empty"
+            )
+
+        firmware_slot = (
+            self.detect_firmware_slot(
+                str(firmware)
+            )
+        )
+
+        if (
+            expected_target_slot
+            is not None
+        ):
+            expected_target_slot = (
+                expected_target_slot.upper()
+            )
+
+            if (
+                firmware_slot
+                != expected_target_slot
+            ):
                 raise FirmwareTransferError(
                     "firmware slot mismatch: "
-                    f"STM32 target={expected_target_slot}, "
-                    f"firmware linked for Slot {firmware_slot}"
+                    f"STM32 target="
+                    f"{expected_target_slot}, "
+                    f"firmware linked for Slot "
+                    f"{firmware_slot}"
                 )
 
-        if max_firmware_size is not None and firmware_size > max_firmware_size:
+        if (
+            max_firmware_size
+            is not None
+            and firmware_size
+            > max_firmware_size
+        ):
             raise FirmwareTransferError(
-                "firmware is larger than the target slot: "
-                f"size={firmware_size}, max={max_firmware_size}"
+                "firmware is larger than "
+                "the target slot: "
+                f"size={firmware_size}, "
+                f"max={max_firmware_size}"
             )
 
         # Verify the local file once more immediately before Serial transfer.
-        actual_sha256 = self._sha256_file(firmware)
-        if actual_sha256 != expected_sha256:
+        actual_sha256 = (
+            self._sha256_file(
+                firmware
+            )
+        )
+
+        if (
+            actual_sha256
+            != expected_sha256
+        ):
             raise FirmwareTransferError(
                 "local firmware SHA-256 mismatch: "
-                f"expected={expected_sha256}, actual={actual_sha256}"
+                f"expected={expected_sha256}, "
+                f"actual={actual_sha256}"
             )
 
         self.ser.reset_input_buffer()
         self.ser.reset_output_buffer()
 
-        header = f"FW_BEGIN,{firmware_size},{expected_sha256}\n"
-        header_bytes = header.encode("ascii")
+        header = (
+            f"FW_BEGIN,"
+            f"{firmware_size},"
+            f"{expected_sha256}\n"
+        )
 
-        print(f"[Primary -> STM32] {header.strip()}")
+        header_bytes = (
+            header.encode("ascii")
+        )
 
-        written = self.ser.write(header_bytes)
-        if written != len(header_bytes):
+        print(
+            f"[Primary -> STM32] "
+            f"{header.strip()}"
+        )
+
+        written = self.ser.write(
+            header_bytes
+        )
+
+        if (
+            written
+            != len(header_bytes)
+        ):
             raise FirmwareTransferError(
-                f"FW_BEGIN write incomplete: expected={len(header_bytes)}, "
+                "FW_BEGIN write incomplete: "
+                f"expected="
+                f"{len(header_bytes)}, "
                 f"written={written}"
             )
 
         self.ser.flush()
 
-        ready_response = self._wait_for_fw_response(ready_timeout)
-        if ready_response != "FW_READY":
+        ready_response = (
+            self._wait_for_fw_response(
+                ready_timeout
+            )
+        )
+
+        if (
+            ready_response
+            != "FW_READY"
+        ):
             raise FirmwareTransferError(
                 "STM32 rejected FW_BEGIN: "
                 f"{ready_response or 'FW_READY timeout'}"
@@ -379,37 +769,61 @@ class SecondarySerial:
 
         sent_size = 0
 
-        with firmware.open("rb") as firmware_file:
+        with firmware.open(
+            "rb"
+        ) as firmware_file:
             while True:
-                data = firmware_file.read(io_buffer_size)
+                data = firmware_file.read(
+                    io_buffer_size
+                )
+
                 if not data:
                     break
 
-                written = self.ser.write(data)
+                written = self.ser.write(
+                    data
+                )
+
                 if written != len(data):
                     raise FirmwareTransferError(
                         "firmware write incomplete: "
-                        f"expected={len(data)}, written={written}"
+                        f"expected={len(data)}, "
+                        f"written={written}"
                     )
 
                 sent_size += written
 
                 # This is simple pacing, not a chunk ACK protocol.
                 if pacing_delay > 0:
-                    time.sleep(pacing_delay)
+                    time.sleep(
+                        pacing_delay
+                    )
 
         self.ser.flush()
 
-        if sent_size != firmware_size:
+        if (
+            sent_size
+            != firmware_size
+        ):
             raise FirmwareTransferError(
                 "firmware send size mismatch: "
-                f"expected={firmware_size}, sent={sent_size}"
+                f"expected={firmware_size}, "
+                f"sent={sent_size}"
             )
 
-        final_response = self._wait_for_fw_response(result_timeout)
-        if final_response != "FW_OK":
+        final_response = (
+            self._wait_for_fw_response(
+                result_timeout
+            )
+        )
+
+        if (
+            final_response
+            != "FW_OK"
+        ):
             raise FirmwareTransferError(
-                "STM32 firmware verification failed: "
+                "STM32 firmware verification "
+                "failed: "
                 f"{final_response or 'FW_OK timeout'}"
             )
 
@@ -425,11 +839,26 @@ class SecondarySerial:
         }
 
     def close(self) -> None:
-        if getattr(self, "ser", None) is not None and self.ser.is_open:
+        if (
+            getattr(
+                self,
+                "ser",
+                None,
+            )
+            is not None
+            and self.ser.is_open
+        ):
             self.ser.close()
 
-    def __enter__(self) -> "SecondarySerial":
+    def __enter__(
+        self,
+    ) -> "SecondarySerial":
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    def __exit__(
+        self,
+        exc_type,
+        exc_value,
+        traceback,
+    ) -> None:
         self.close()
