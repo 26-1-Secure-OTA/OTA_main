@@ -214,6 +214,17 @@ STATUS,stm32-led-001,UID=12345678ABCDEF0011223344,VER=1.0.1,ACTIVE=A,TARGET=B,RE
 python status_check.py
 ```
 
+실제 STM32Cube 워크스페이스에서 빌드한 ECU별 A/B 바이너리와 Primary의
+슬롯 판별·STATUS 계약 호환성을 검증하려면 저장소 루트에서 실행합니다.
+
+```bash
+python3 -m unittest discover -s STM32_Workspace/tests -v
+```
+
+이 테스트는 여섯 바이너리의 Cortex-M 벡터가 선언된 A/B 슬롯에 링크됐는지,
+ECU ID와 `1.8.0` 버전이 실제 바이너리에 포함됐는지, 보드 STATUS 응답을
+Primary가 정상 파싱하는지 검사합니다.
+
 출력된 UID를 `Primary_ECU/config/secondary_registry.json`의 동일한 ECU 항목에
 등록해야 합니다. UID가 `null`인 Secondary는 안전 정책에서
 `UNKNOWN_SECONDARY`로 차단됩니다.

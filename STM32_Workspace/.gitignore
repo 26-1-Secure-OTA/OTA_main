@@ -1,0 +1,10 @@
+# Generated CubeIDE build products (keep generated make metadata).
+**/Debug/**/*.o
+**/Debug/**/*.d
+**/Debug/**/*.su
+**/Debug/**/*.cyclo
+**/Debug/*.elf
+**/Debug/*.bin
+**/Debug/*.map
+**/Debug/*.list
+**/Debug/*.stdout
