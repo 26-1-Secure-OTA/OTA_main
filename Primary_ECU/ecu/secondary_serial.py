@@ -264,9 +264,22 @@ class SecondarySerial:
                 1,
             )
 
-            values[key.strip()] = (
-                value.strip()
-            )
+            key = key.strip()
+            value = value.strip()
+
+            if not key or not value:
+                raise FirmwareTransferError(
+                    "empty STM32 STATUS field: "
+                    f"{field}"
+                )
+
+            if key in values:
+                raise FirmwareTransferError(
+                    "duplicate STM32 STATUS field: "
+                    f"{key}"
+                )
+
+            values[key] = value
 
         try:
             active_slot = values["ACTIVE"]
@@ -836,6 +849,8 @@ class SecondarySerial:
             "length": firmware_size,
             "sha256": actual_sha256,
             "target_slot": firmware_slot,
+            # The current protocol has no ACK retry or retransmission.
+            "retry_count": 0,
         }
 
     def close(self) -> None:

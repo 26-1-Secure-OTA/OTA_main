@@ -1,4 +1,8 @@
 from datetime import datetime, timezone
+import re
+
+
+VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def _now_iso() -> str:
@@ -11,6 +15,14 @@ def _now_iso() -> str:
 
 
 def _version_tuple(version: str) -> tuple:
+    if (
+        not isinstance(version, str)
+        or not VERSION_PATTERN.fullmatch(version)
+    ):
+        raise ValueError(
+            f"invalid semantic version: {version}"
+        )
+
     return tuple(
         int(part)
         for part in version.split(".")
@@ -145,10 +157,36 @@ def evaluate_policy(
             "Target version was not found in metadata",
         )
 
+    try:
+        target_version_tuple = _version_tuple(
+            target_version
+        )
+    except (TypeError, ValueError):
+        return _decision(
+            expected_ecu,
+            "BLOCK",
+            "INVALID_TARGET_VERSION",
+            f"invalid target version={target_version}",
+        )
+
+    current_version = status.get("version")
+
+    try:
+        current_version_tuple = _version_tuple(
+            current_version
+        )
+    except (TypeError, ValueError):
+        return _decision(
+            expected_ecu,
+            "BLOCK",
+            "INVALID_CURRENT_VERSION",
+            f"invalid current version={current_version}",
+        )
+
     if not force_reinstall:
         if (
-            _version_tuple(target_version)
-            <= _version_tuple(status["version"])
+            target_version_tuple
+            <= current_version_tuple
         ):
             return _decision(
                 expected_ecu,

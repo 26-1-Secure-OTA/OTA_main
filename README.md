@@ -196,6 +196,28 @@ Director는 동일한 버전의 A/B 파일이 모두 준비된 경우에만 해�
 6. 펌웨어 전송 직전에 Secondary 상태를 다시 확인하고, 슬롯이 변경되었으면 설치를 중단합니다.
 7. 펌웨어를 전송한 후 대상 슬롯이 활성 슬롯으로 변경되었는지 확인합니다.
 
+STM32는 `STATUS_REQ`에 다음 필드를 한 줄로 응답해야 합니다.
+
+```text
+STATUS,stm32-led-001,UID=12345678ABCDEF0011223344,VER=1.0.1,ACTIVE=A,TARGET=B,READY=1,MAX=49152,UPTIME_MS=125340,RESET=POWER_ON,UART_ERR=0,HEALTH=OK
+```
+
+`UID`는 STM32의 96비트 UID를 24자리 16진수로 표현한 값이며, `VER`는
+`x.y.z` 형식이어야 합니다. `RESET`은 `POWER_ON`, `PIN_RESET`, `SOFTWARE`,
+`WATCHDOG`, `UNKNOWN` 중 하나이고, `HEALTH`는 `OK`, `WARN`, `ERROR` 중
+하나여야 합니다. 정상적인 UART 수신 timeout은 `UART_ERR`에 포함하지 않습니다.
+
+처음 연결한 뒤 `Primary_ECU` 디렉터리에서 아래 명령으로 각 보드의 UID를
+확인합니다.
+
+```bash
+python status_check.py
+```
+
+출력된 UID를 `Primary_ECU/config/secondary_registry.json`의 동일한 ECU 항목에
+등록해야 합니다. UID가 `null`인 Secondary는 안전 정책에서
+`UNKNOWN_SECONDARY`로 차단됩니다.
+
 예를 들어 Secondary가 `ACTIVE=A,TARGET=B`를 보고하면 Primary는
 `stm32-led-001_<version>_slot_b.bin` 파일만 요청합니다. A/B 파일 중 하나만
 업로드되었거나 두 파일의 버전이 일치하지 않으면 해당 펌웨어는 차량에

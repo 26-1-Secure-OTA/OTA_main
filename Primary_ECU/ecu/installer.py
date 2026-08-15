@@ -31,6 +31,11 @@ from .storage import Storage
 from .secondary_state import SecondaryStateStore
 from .safety_policy import evaluate_policy
 from .experiment_logger import ExperimentLogger
+from .feature_collector import (
+    FEATURE_NAMES,
+    FeatureCollectionError,
+    collect_features,
+)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
@@ -2129,6 +2134,10 @@ class Installer:
                     "throughput_kbps": (
                         throughput_kbps
                     ),
+                    "retry_count": transfer_result.get(
+                        "retry_count",
+                        0,
+                    ),
                 }
 
         except Exception as exc:
@@ -2162,6 +2171,8 @@ class Installer:
                 "skipped": False,
                 "ecu_serial": expected_ecu,
                 "reason": str(exc),
+                # The current Serial protocol performs no retries.
+                "retry_count": 0,
             }
 
     def install_serial_firmware(
@@ -2190,6 +2201,44 @@ class Installer:
             registry = json.load(file)
 
         logger = ExperimentLogger()
+
+        scenario_id = os.environ.get(
+            "OTA_SCENARIO_ID",
+            "UNSPECIFIED",
+        )
+        data_source = os.environ.get(
+            "OTA_DATA_SOURCE",
+            "BOARD",
+        )
+
+        if data_source not in {
+            "BOARD",
+            "SIMULATOR",
+        }:
+            raise ValueError(
+                "OTA_DATA_SOURCE must be BOARD or SIMULATOR: "
+                f"{data_source}"
+            )
+
+        def optional_environment_float(
+            name: str,
+        ) -> Optional[float]:
+            raw_value = os.environ.get(name)
+            if raw_value is None or not raw_value.strip():
+                return None
+            try:
+                return float(raw_value)
+            except ValueError as exc:
+                raise ValueError(
+                    f"{name} must be numeric: {raw_value}"
+                ) from exc
+
+        power_percent = optional_environment_float(
+            "OTA_POWER_PERCENT"
+        )
+        temperature_c = optional_environment_float(
+            "OTA_TEMPERATURE_C"
+        )
 
         campaign_id = (
             datetime.now(
@@ -2222,6 +2271,47 @@ class Installer:
         )
 
         results = []
+
+        def experiment_row(
+            *,
+            expected_ecu: str,
+            status: Optional[dict],
+            artifact_info: Optional[dict],
+            decision: dict,
+            features: dict,
+        ) -> dict:
+            observed_status = status or {}
+            artifact = artifact_info or {}
+
+            return {
+                "scenario_id": scenario_id,
+                "campaign_id": campaign_id,
+                "secondary_id": expected_ecu,
+                "data_source": data_source,
+                "current_version": observed_status.get("version"),
+                "target_version": artifact.get("target_version"),
+                **features,
+                "policy_decision": decision["decision"],
+                "policy_reason_code": decision["reason_code"],
+                "update_attempted": False,
+                "success": None,
+                "update_duration_ms": None,
+                "transfer_duration_ms": None,
+                "throughput_kbps": None,
+                "retry_count": None,
+                "slot_switched": None,
+                "version_verified": None,
+                "active_slot_before": observed_status.get("active_slot"),
+                "active_slot_after": None,
+                "failure_stage": None,
+                "failure_reason_code": None,
+                "uptime_ms": observed_status.get("uptime_ms"),
+                "reset_cause": observed_status.get("reset_cause"),
+                "uart_error_count": observed_status.get(
+                    "uart_error_count"
+                ),
+                "health": observed_status.get("health"),
+            }
 
         for expected_ecu in (
             fixed_order
@@ -2308,6 +2398,25 @@ class Installer:
                 ),
             )
 
+            try:
+                features = collect_features(
+                    secondary_id=expected_ecu,
+                    status=status or {},
+                    artifact_info=artifact_info or {},
+                    power_percent=power_percent,
+                    temperature_c=temperature_c,
+                    log_path=str(logger.log_path),
+                )
+            except FeatureCollectionError as exc:
+                print(
+                    "[Feature Collector] WARNING: "
+                    f"ECU={expected_ecu}: {exc}"
+                )
+                features = {
+                    name: None
+                    for name in FEATURE_NAMES
+                }
+
             if (
                 decision["decision"]
                 != "ALLOW"
@@ -2374,52 +2483,15 @@ class Installer:
                     result
                 )
 
-                logger.append({
-                    "campaign_id": (
-                        campaign_id
-                    ),
-                    "secondary_id": (
-                        expected_ecu
-                    ),
-                    "data_source": (
-                        "BOARD"
-                    ),
-                    "current_version": (
-                        status.get(
-                            "version"
-                        )
-                        if status
-                        else None
-                    ),
-                    "target_version": (
-                        artifact_info.get(
-                            "target_version"
-                        )
-                        if artifact_info
-                        else None
-                    ),
-                    "link_response_ms": (
-                        status.get(
-                            "link_response_ms"
-                        )
-                        if status
-                        else None
-                    ),
-                    "policy_decision": (
-                        decision[
-                            "decision"
-                        ]
-                    ),
-                    "policy_reason_code": (
-                        decision[
-                            "reason_code"
-                        ]
-                    ),
-                    "update_attempted": (
-                        False
-                    ),
-                    "success": None,
-                })
+                logger.append(
+                    experiment_row(
+                        expected_ecu=expected_ecu,
+                        status=status,
+                        artifact_info=artifact_info,
+                        decision=decision,
+                        features=features,
+                    )
+                )
 
                 continue
 
@@ -2550,91 +2622,33 @@ class Installer:
                 or {}
             )
 
-            logger.append({
-                "campaign_id": (
-                    campaign_id
+            log_row = experiment_row(
+                expected_ecu=expected_ecu,
+                status=before_status,
+                artifact_info=artifact_info,
+                decision=decision,
+                features=features,
+            )
+            log_row.update({
+                "update_attempted": True,
+                "success": bool(result.get("ok")),
+                "update_duration_ms": update_duration_ms,
+                "transfer_duration_ms": result.get(
+                    "transfer_duration_ms"
                 ),
-                "secondary_id": (
-                    expected_ecu
-                ),
-                "data_source": (
-                    "BOARD"
-                ),
-                "current_version": (
-                    before_status.get(
-                        "version"
-                    )
-                ),
-                "target_version": (
-                    artifact_info.get(
-                        "target_version"
-                    )
-                    if artifact_info
-                    else None
-                ),
-                "link_response_ms": (
-                    before_status.get(
-                        "link_response_ms"
-                    )
-                ),
-                "policy_decision": (
-                    "ALLOW"
-                ),
-                "policy_reason_code": (
-                    "POLICY_PASSED"
-                ),
-                "update_attempted": (
-                    True
-                ),
-                "success": bool(
-                    result.get("ok")
-                ),
-                "update_duration_ms": (
-                    update_duration_ms
-                ),
-                "transfer_duration_ms": (
-                    result.get(
-                        "transfer_duration_ms"
-                    )
-                ),
-                "throughput_kbps": (
-                    result.get(
-                        "throughput_kbps"
-                    )
-                ),
-                "slot_switched": (
-                    result.get(
-                        "slot_switched"
-                    )
-                ),
-                "version_verified": (
-                    result.get(
-                        "version_verified"
-                    )
-                ),
+                "throughput_kbps": result.get("throughput_kbps"),
+                "retry_count": result.get("retry_count", 0),
+                "slot_switched": result.get("slot_switched"),
+                "version_verified": result.get("version_verified"),
+                "active_slot_after": after_status.get("active_slot"),
                 "failure_stage": (
-                    None
-                    if result.get("ok")
-                    else "INSTALL"
+                    None if result.get("ok") else "INSTALL"
                 ),
                 "failure_reason_code": (
-                    None
-                    if result.get("ok")
-                    else result.get(
-                        "reason"
-                    )
-                ),
-                "active_slot_before": (
-                    before_status.get(
-                        "active_slot"
-                    )
-                ),
-                "active_slot_after": (
-                    after_status.get(
-                        "active_slot"
-                    )
+                    None if result.get("ok") else result.get("reason")
                 ),
             })
+            logger.append(log_row)
 
         attempted_results = [
             result

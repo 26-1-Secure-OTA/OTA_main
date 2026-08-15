@@ -82,11 +82,13 @@ class FlaskServer:
 
 
 class FileHandler:
-    def __init__(self, mqtt_broker, mqtt_port, watch_dir, files_path):
+    def __init__(self, mqtt_broker, mqtt_port, watch_dir, files_path,
+                 image_repository_url):
         self.MQTT_BROKER = mqtt_broker
         self.MQTT_PORT = mqtt_port
         self.WATCH_DIR = watch_dir
         self.files_path = files_path
+        self.image_repository_url = image_repository_url.rstrip("/")
 
         self.MQTT_REQUEST_TOPIC = "primary/request"
         self.MQTT_META_TOPIC = "image/metaData"
@@ -134,8 +136,7 @@ class FileHandler:
             with open("../Image_Repo/meta/timestamp.json", "r", encoding="utf-8") as f:
                 data = json.load(f)
             
-            upload_url = f"https://{self.MQTT_BROKER}:8443"
-            data["url"] = upload_url
+            data["url"] = self.image_repository_url
             
             # Timestamp + URL Json 데이터 전송
             self.client.publish(self.MQTT_META_TOPIC, json.dumps(data, ensure_ascii=False).encode("utf-8"), qos=2)
@@ -277,10 +278,20 @@ if __name__ == "__main__":
 
     MQTT_BROKER = "172.20.10.7"
     MQTT_PORT = 8883
+    IMAGE_REPOSITORY_URL = os.environ.get(
+        "IMAGE_REPOSITORY_URL",
+        "https://172.23.168.60:8443",
+    )
     WATCH_DIR = "../Image_Repo/meta"
     files_path = "./data/update_image.tar.xz"
 
-    file_handler = FileHandler(MQTT_BROKER, MQTT_PORT, WATCH_DIR, files_path)
+    file_handler = FileHandler(
+        MQTT_BROKER,
+        MQTT_PORT,
+        WATCH_DIR,
+        files_path,
+        IMAGE_REPOSITORY_URL,
+    )
     file_handler.connect_mqtt()
     file_handler.start_watching()
     file_handler.loop_mqtt()
