@@ -30,6 +30,11 @@ SLOT_B_END = 0x0801C000
 class FirmwareTransferError(RuntimeError):
     """Raised when the STM32 firmware transfer protocol fails."""
 
+    def __init__(self, message, *, failure_stage=None, reason_code=None):
+        super().__init__(message)
+        self.failure_stage = failure_stage
+        self.reason_code = reason_code
+
 
 class SecondarySerial:
     """Send one verified .bin firmware image to the STM32 over Serial.
@@ -852,7 +857,9 @@ class SecondarySerial:
             raise FirmwareTransferError(
                 "local firmware SHA-256 mismatch: "
                 f"expected={expected_sha256}, "
-                f"actual={actual_sha256}"
+                f"actual={actual_sha256}",
+                failure_stage="HASH_VERIFY",
+                reason_code="FW_HASH_MISMATCH",
             )
 
         self.ser.reset_input_buffer()
@@ -902,7 +909,9 @@ class SecondarySerial:
         ):
             raise FirmwareTransferError(
                 "STM32 rejected FW_BEGIN: "
-                f"{ready_response or 'FW_READY timeout'}"
+                f"{ready_response or 'FW_READY timeout'}",
+                failure_stage="TRANSFER_READY",
+                reason_code="READY_NOT_RECEIVED",
             )
 
         sent_size = 0
@@ -926,7 +935,9 @@ class SecondarySerial:
                     raise FirmwareTransferError(
                         "firmware write incomplete: "
                         f"expected={len(data)}, "
-                        f"written={written}"
+                        f"written={written}",
+                        failure_stage="TRANSFER",
+                        reason_code="TRANSFER_WRITE_FAILED",
                     )
 
                 sent_size += written
@@ -962,7 +973,12 @@ class SecondarySerial:
             raise FirmwareTransferError(
                 "STM32 firmware verification "
                 "failed: "
-                f"{final_response or 'FW_OK timeout'}"
+                f"{final_response or 'FW_OK timeout'}",
+                failure_stage="HASH_VERIFY",
+                reason_code=(
+                    "FW_OK_NOT_RECEIVED" if not final_response
+                    else "FW_HASH_MISMATCH"
+                ),
             )
 
         return {

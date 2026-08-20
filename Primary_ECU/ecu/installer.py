@@ -36,6 +36,9 @@ from .feature_collector import (
     FeatureCollectionError,
     collect_features,
 )
+from ai.fault_injection import FaultInjector
+from ai.predictor import FailureRiskPredictor
+from ai.scheduler import FIXED_ORDER, schedule_allow_ecus
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
@@ -63,6 +66,32 @@ def _expected_sha256_from_chunk_name(s: str) -> str:
 class InstallResult:
     ok: bool
     reason: Optional[str] = None
+
+
+def _failure_reason(stage: str, message: str) -> str:
+    """Map only errors observable at a known code location to stable codes."""
+    lowered = message.lower()
+    if stage == "TRANSFER_READY":
+        return "READY_NOT_RECEIVED"
+    if stage == "HASH_VERIFY":
+        return "FW_HASH_MISMATCH"
+    if stage == "TRANSFER":
+        if "timeout" in lowered or "fault injection transfer_timeout" in lowered:
+            return "TRANSFER_TIMEOUT"
+        if "serial" in lowered or "port" in lowered:
+            return "SERIAL_DISCONNECTED"
+        return "TRANSFER_WRITE_FAILED"
+    if stage == "REBOOT":
+        return "REBOOT_TIMEOUT"
+    if stage == "SLOT_VERIFY":
+        return "SLOT_MISMATCH"
+    if stage == "VERSION_VERIFY":
+        return "VERSION_MISMATCH"
+    if stage == "HEALTH_CHECK":
+        return "HEALTH_NOT_OK"
+    if stage == "POLICY":
+        return "POLICY_RECHECK_FAILED"
+    return "SERIAL_DISCONNECTED" if "serial" in lowered else "TRANSFER_WRITE_FAILED"
 
 
 class Installer:
@@ -1745,6 +1774,9 @@ class Installer:
         port: str,
         expected_ecu: str,
         expected_secondary_status: Optional[dict] = None,
+        artifact_info: Optional[dict] = None,
+        expected_uid: Optional[str] = None,
+        fault_injector: Optional[FaultInjector] = None,
     ) -> dict:
         """Install the matching .bin on the currently connected Secondary.
 
@@ -1755,6 +1787,8 @@ class Installer:
         from .secondary_serial import SecondarySerial
 
         target = None
+        failure_stage = "DISCOVERY"
+        fault_injector = fault_injector or FaultInjector()
 
         verified_bins = [
             item
@@ -1785,6 +1819,31 @@ class Installer:
                 # 업데이트 직전 Secondary STATUS
                 # ---------------------------------------------------------
                 before_status = secondary.get_status()
+
+                # Full policy recheck immediately before installation. This
+                # remains authoritative regardless of scheduler output.
+                failure_stage = "POLICY"
+                recheck = evaluate_policy(
+                    expected_ecu=expected_ecu,
+                    status=before_status,
+                    artifact_info=artifact_info,
+                    expected_uid=expected_uid,
+                )
+                if recheck["decision"] != "ALLOW":
+                    return {
+                        "ok": False,
+                        "skipped": True,
+                        "ecu_serial": expected_ecu,
+                        "reason": recheck["reason_code"],
+                        "failure_stage": "POLICY",
+                        "failure_reason_code": (
+                            "POLICY_HOLD" if recheck["decision"] == "HOLD" else "POLICY_BLOCK"
+                        ),
+                        "policy_recheck": True,
+                        "policy_recheck_decision": recheck["decision"],
+                        "secondary_before": before_status,
+                        "retry_count": 0,
+                    }
 
                 if before_status["ecu_serial"] != expected_ecu:
                     raise RuntimeError(
@@ -1936,7 +1995,8 @@ class Installer:
                 # Serial Firmware 전송 시간 측정
                 # ---------------------------------------------------------
                 transfer_started = time.monotonic()
-
+                failure_stage = "TRANSFER"
+                fault_injector.trigger("before_transfer")
                 transfer_result = secondary.send_firmware(
                     firmware_path=target["path"],
                     expected_sha256=target["sha256"],
@@ -1947,6 +2007,7 @@ class Installer:
                         before_status["max_size"]
                     ),
                 )
+                fault_injector.trigger("after_transfer")
 
                 transfer_duration_ms = int(
                     (
@@ -2017,6 +2078,7 @@ class Installer:
                     },
                 )
 
+                failure_stage = "REBOOT"
                 after_status = secondary.get_status(
                     timeout_seconds=10.0
                 )
@@ -2037,6 +2099,8 @@ class Installer:
                 # ---------------------------------------------------------
                 # 사후 Slot 검사
                 # ---------------------------------------------------------
+                failure_stage = "SLOT_VERIFY"
+                fault_injector.trigger("slot_verify")
                 if (
                     after_status["active_slot"]
                     != before_status["target_slot"]
@@ -2063,6 +2127,8 @@ class Installer:
                 # ---------------------------------------------------------
                 # 사후 Firmware Version 검사
                 # ---------------------------------------------------------
+                failure_stage = "VERSION_VERIFY"
+                fault_injector.trigger("version_verify")
                 expected_version = target.get(
                     "target_version"
                 )
@@ -2081,6 +2147,8 @@ class Installer:
                 # ---------------------------------------------------------
                 # 사후 HEALTH 검사
                 # ---------------------------------------------------------
+                failure_stage = "HEALTH_CHECK"
+                fault_injector.trigger("health_check")
                 if (
                     after_status.get("health") is not None
                     and after_status.get("health") != "OK"
@@ -2138,9 +2206,13 @@ class Installer:
                         "retry_count",
                         0,
                     ),
+                    "policy_recheck": True,
+                    "policy_recheck_decision": "ALLOW",
                 }
 
         except Exception as exc:
+            observed_stage = getattr(exc, "failure_stage", None) or failure_stage
+            observed_reason = getattr(exc, "reason_code", None) or _failure_reason(observed_stage, str(exc))
             self.secondary_states.transition(
                 expected_ecu,
                 "FAILED",
@@ -2171,6 +2243,9 @@ class Installer:
                 "skipped": False,
                 "ecu_serial": expected_ecu,
                 "reason": str(exc),
+                "failure_stage": observed_stage,
+                "failure_reason_code": observed_reason,
+                "policy_recheck": failure_stage != "DISCOVERY",
                 # The current Serial protocol performs no retries.
                 "retry_count": 0,
             }
@@ -2255,11 +2330,7 @@ class Installer:
             )
         )
 
-        fixed_order = [
-            "stm32-led-001",
-            "stm32-led-002",
-            "stm32-led-003",
-        ]
+        fixed_order = list(FIXED_ORDER)
 
         target_ids = {
             item.get(
@@ -2317,31 +2388,92 @@ class Installer:
                     "uart_error_count"
                 ),
                 "health": observed_status.get("health"),
+                "scheduler_requested": schedule_result["scheduler_requested"],
+                "scheduler_used": schedule_result["scheduler_used"],
+                "fallback_reason": schedule_result["fallback_reason"],
+                "policy_recheck": None,
+                "model_version": schedule_result["model_version"],
+                "model_hash": schedule_result["model_hash"],
+                "feature_schema_version": schedule_result["feature_schema_version"],
+                "failure_risk": schedule_result["predictions"].get(expected_ecu),
             }
 
-        for expected_ecu in (
-            fixed_order
-        ):
+        # Evaluate every target before scheduling. Only the resulting ALLOW
+        # set is exposed to the AI predictor; HOLD/BLOCK remain authoritative.
+        preflight = {}
+        allow_features = {}
+        for expected_ecu in fixed_order:
+            if expected_ecu not in target_ids:
+                continue
+            secondary_info = discovered.get(expected_ecu)
+            status = secondary_info["status"] if secondary_info else None
+            ecu_artifacts = [item for item in downloaded_results if item.get("ecu_serial") == expected_ecu]
+            artifact_info = next(
+                (item for item in ecu_artifacts if item.get("status") == "OK" and item.get("file_type") == "bin"),
+                ecu_artifacts[0] if ecu_artifacts else None,
+            )
+            registry_entry = registry.get(expected_ecu, {})
+            decision = evaluate_policy(
+                expected_ecu=expected_ecu, status=status,
+                artifact_info=artifact_info,
+                expected_uid=registry_entry.get("uid"),
+            )
+            try:
+                features = collect_features(
+                    secondary_id=expected_ecu, status=status or {},
+                    artifact_info=artifact_info or {}, power_percent=power_percent,
+                    temperature_c=temperature_c, log_path=str(logger.log_path),
+                )
+            except FeatureCollectionError as exc:
+                print(f"[Feature Collector] WARNING: ECU={expected_ecu}: {exc}")
+                features = {name: None for name in FEATURE_NAMES}
+            preflight[expected_ecu] = (secondary_info, status, artifact_info, registry_entry, decision, features)
+            if decision["decision"] == "ALLOW":
+                allow_features[expected_ecu] = features
+
+        scheduler_requested = os.environ.get("OTA_SCHEDULER", "FIXED").upper()
+        if scheduler_requested not in {"FIXED", "AI"}:
+            scheduler_requested = "FIXED"
+        predictor = None
+        predictor_error = None
+        if scheduler_requested == "AI":
+            try:
+                predictor = FailureRiskPredictor(
+                    os.environ.get("OTA_AI_MODEL", "./models/decision-tree-v1.joblib"),
+                    os.environ.get("OTA_AI_MODEL_METADATA", "./models/decision-tree-v1.metadata.json"),
+                )
+            except Exception as exc:
+                predictor_error = str(exc)
+            if any(features.get("telemetry_valid") is not True for features in allow_features.values()):
+                predictor = None
+                predictor_error = "INVALID_TELEMETRY"
+        schedule_result = schedule_allow_ecus(
+            allow_features, registry.keys(), predictor=predictor,
+            requested=scheduler_requested,
+        )
+        if predictor_error:
+            schedule_result["fallback_reason"] = (
+                predictor_error if predictor_error in {
+                    "MODEL_NOT_FOUND", "MODEL_HASH_MISMATCH", "FEATURE_SCHEMA_MISMATCH",
+                    "MODEL_DEPENDENCY_MISSING",
+                    "INVALID_TELEMETRY",
+                } else "MODEL_EXCEPTION"
+            )
+        scheduled_allow = iter(schedule_result["order"])
+        execution_order = [
+            next(scheduled_allow) if preflight[ecu][4]["decision"] == "ALLOW" else ecu
+            for ecu in fixed_order if ecu in preflight
+        ]
+        fault_injector = FaultInjector.from_environment()
+
+        for expected_ecu in execution_order:
             if (
                 expected_ecu
                 not in target_ids
             ):
                 continue
 
-            secondary_info = (
-                discovered.get(
-                    expected_ecu
-                )
-            )
-
-            status = (
-                secondary_info[
-                    "status"
-                ]
-                if secondary_info
-                is not None
-                else None
-            )
+            secondary_info, status, artifact_info, registry_entry, decision, features = preflight[expected_ecu]
 
             ecu_artifacts = [
                 item
@@ -2355,73 +2487,6 @@ class Installer:
                     == expected_ecu
                 )
             ]
-
-            artifact_info = next(
-                (
-                    item
-                    for item in (
-                        ecu_artifacts
-                    )
-                    if (
-                        item.get(
-                            "status"
-                        )
-                        == "OK"
-                        and (
-                            item.get(
-                                "file_type"
-                            )
-                            == "bin"
-                        )
-                    )
-                ),
-                (
-                    ecu_artifacts[0]
-                    if ecu_artifacts
-                    else None
-                ),
-            )
-
-            registry_entry = (
-                registry.get(
-                    expected_ecu,
-                    {},
-                )
-            )
-
-            decision = evaluate_policy(
-                expected_ecu=(
-                    expected_ecu
-                ),
-                status=status,
-                artifact_info=(
-                    artifact_info
-                ),
-                expected_uid=(
-                    registry_entry.get(
-                        "uid"
-                    )
-                ),
-            )
-
-            try:
-                features = collect_features(
-                    secondary_id=expected_ecu,
-                    status=status or {},
-                    artifact_info=artifact_info or {},
-                    power_percent=power_percent,
-                    temperature_c=temperature_c,
-                    log_path=str(logger.log_path),
-                )
-            except FeatureCollectionError as exc:
-                print(
-                    "[Feature Collector] WARNING: "
-                    f"ECU={expected_ecu}: {exc}"
-                )
-                features = {
-                    name: None
-                    for name in FEATURE_NAMES
-                }
 
             if (
                 decision["decision"]
@@ -2574,6 +2639,9 @@ class Installer:
                             expected_ecu
                         )
                     ),
+                    artifact_info=artifact_info,
+                    expected_uid=registry_entry.get("uid"),
+                    fault_injector=fault_injector,
                 )
             )
 
@@ -2593,15 +2661,14 @@ class Installer:
                 "reason_code"
             ] = "POLICY_PASSED"
 
+            update_attempted = not result.get("skipped", False)
             result[
                 "update_attempted"
-            ] = True
+            ] = update_attempted
 
             result[
                 "success"
-            ] = bool(
-                result.get("ok")
-            )
+            ] = bool(result.get("ok")) if update_attempted else None
 
             result[
                 "update_duration_ms"
@@ -2636,8 +2703,8 @@ class Installer:
                 features=features,
             )
             log_row.update({
-                "update_attempted": True,
-                "success": bool(result.get("ok")),
+                "update_attempted": update_attempted,
+                "success": bool(result.get("ok")) if update_attempted else None,
                 "update_duration_ms": update_duration_ms,
                 "transfer_duration_ms": result.get(
                     "transfer_duration_ms"
@@ -2647,12 +2714,9 @@ class Installer:
                 "slot_switched": result.get("slot_switched"),
                 "version_verified": result.get("version_verified"),
                 "active_slot_after": after_status.get("active_slot"),
-                "failure_stage": (
-                    None if result.get("ok") else "INSTALL"
-                ),
-                "failure_reason_code": (
-                    None if result.get("ok") else result.get("reason")
-                ),
+                "failure_stage": None if result.get("ok") else result.get("failure_stage"),
+                "failure_reason_code": None if result.get("ok") else result.get("failure_reason_code"),
+                "policy_recheck": result.get("policy_recheck"),
             })
             logger.append(log_row)
 

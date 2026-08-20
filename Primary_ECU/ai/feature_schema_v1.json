@@ -1,0 +1,27 @@
+{
+  "feature_schema_version": 1,
+  "feature_names": [
+    "link_response_ms",
+    "previous_failures",
+    "supply_voltage_mv",
+    "temperature_c",
+    "app_flash_free_ratio",
+    "recent_reset_count"
+  ],
+  "feature_order": [
+    "link_response_ms",
+    "previous_failures",
+    "supply_voltage_mv",
+    "temperature_c",
+    "app_flash_free_ratio",
+    "recent_reset_count"
+  ],
+  "feature_units": {
+    "link_response_ms": "milliseconds",
+    "previous_failures": "count",
+    "supply_voltage_mv": "millivolts",
+    "temperature_c": "Celsius",
+    "app_flash_free_ratio": "ratio",
+    "recent_reset_count": "count"
+  }
+}
