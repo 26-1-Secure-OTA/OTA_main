@@ -78,11 +78,21 @@ typedef struct
 #define ACTIVE_SLOT             "A"
 #define TARGET_SLOT             "B"
 #define HEALTH_STATUS           "OK"
-#define STATUS_BUFFER_SIZE      256U
+#define STATUS_BUFFER_SIZE      384U
+#ifndef LED_TOGGLE_INTERVAL_MS
 #define LED_TOGGLE_INTERVAL_MS  200U
+#endif
 #define FW_HEADER_BUFFER_SIZE   128U
 #define FW_DATA_BUFFER_SIZE     256U
 #define SHA256_HEX_LENGTH       64U
+#define ADC_SAMPLE_COUNT        16U
+#define ADC_CHANNEL_TEMPERATURE 16U
+#define ADC_CHANNEL_VREFINT     17U
+#define VREFINT_TYPICAL_MV      1200U
+#define TEMPERATURE_V25_UV      1430000L
+#define TEMPERATURE_SLOPE_UV_C  4300L
+#define POWER_GOOD_MIN_MV       2700U
+#define POWER_GOOD_MAX_MV       3600U
 
 /* USER CODE END PD */
 
@@ -105,6 +115,7 @@ static uint32_t target_slot_write_address = TARGET_SLOT_ADDRESS;
 static uint8_t fw_data_buffer[FW_DATA_BUFFER_SIZE];
 static uint32_t uart_error_count = 0U;
 static const char *reset_cause = "UNKNOWN";
+extern uint8_t __flash_image_end__;
 
 /* USER CODE END PV */
 
@@ -128,6 +139,13 @@ static void Calculate_Target_Slot_SHA256(uint8_t digest[32]);
 static uint8_t SHA256_Matches_Expected(const uint8_t digest[32]);
 static void Make_UID_String(char uid_string[25]);
 static const char *Detect_Reset_Cause(void);
+static void Telemetry_ADC_Init(void);
+static uint16_t Read_ADC_Channel_Average(uint8_t channel);
+static uint8_t Read_Hardware_Telemetry(
+    uint32_t *vdd_mv,
+    int32_t *temperature_mc
+);
+static uint32_t Get_Application_Flash_Used(void);
 static void Send_Status_Response(void);
 static void Process_Serial_Command(void);
 static void Receive_Firmware_Data(void);
@@ -437,12 +455,137 @@ static const char *Detect_Reset_Cause(void)
   return cause;
 }
 
+static void Telemetry_ADC_Init(void)
+{
+  RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_ADCPRE) |
+              RCC_CFGR_ADCPRE_DIV6;
+  RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
+  RCC->APB2RSTR |= RCC_APB2RSTR_ADC1RST;
+  RCC->APB2RSTR &= ~RCC_APB2RSTR_ADC1RST;
+
+  ADC1->CR1 = 0U;
+  ADC1->CR2 = ADC_CR2_TSVREFE | ADC_CR2_EXTSEL | ADC_CR2_ADON;
+  ADC1->SMPR1 |= ADC_SMPR1_SMP16 | ADC_SMPR1_SMP17;
+  ADC1->SQR1 &= ~ADC_SQR1_L;
+
+  HAL_Delay(1U);
+  ADC1->CR2 |= ADC_CR2_RSTCAL;
+  while ((ADC1->CR2 & ADC_CR2_RSTCAL) != 0U)
+  {
+  }
+  ADC1->CR2 |= ADC_CR2_CAL;
+  while ((ADC1->CR2 & ADC_CR2_CAL) != 0U)
+  {
+  }
+  HAL_Delay(1U);
+}
+
+static uint16_t Read_ADC_Channel_Average(uint8_t channel)
+{
+  uint32_t sum = 0U;
+  uint32_t sample_index;
+
+  ADC1->SQR3 = (ADC1->SQR3 & ~ADC_SQR3_SQ1) |
+               ((uint32_t)channel & ADC_SQR3_SQ1);
+
+  for (sample_index = 0U;
+       sample_index < (ADC_SAMPLE_COUNT + 1U);
+       sample_index++)
+  {
+    uint32_t started_at;
+    uint16_t sample;
+
+    ADC1->SR &= ~ADC_SR_EOC;
+    ADC1->CR2 |= ADC_CR2_EXTTRIG | ADC_CR2_SWSTART;
+    started_at = HAL_GetTick();
+
+    while ((ADC1->SR & ADC_SR_EOC) == 0U)
+    {
+      if ((HAL_GetTick() - started_at) > 5U)
+      {
+        return 0U;
+      }
+    }
+
+    sample = (uint16_t)(ADC1->DR & 0x0FFFU);
+    if (sample_index != 0U)
+    {
+      sum += sample;
+    }
+  }
+
+  return (uint16_t)(sum / ADC_SAMPLE_COUNT);
+}
+
+static uint8_t Read_Hardware_Telemetry(
+    uint32_t *vdd_mv,
+    int32_t *temperature_mc
+)
+{
+  uint16_t vref_raw;
+  uint16_t temperature_raw;
+  int64_t vsense_uv;
+  int64_t temperature_delta_mc;
+
+  vref_raw = Read_ADC_Channel_Average(ADC_CHANNEL_VREFINT);
+  temperature_raw =
+      Read_ADC_Channel_Average(ADC_CHANNEL_TEMPERATURE);
+
+  if ((vref_raw == 0U) || (temperature_raw == 0U))
+  {
+    *vdd_mv = 0U;
+    *temperature_mc = 0;
+    return 0U;
+  }
+
+  *vdd_mv = (VREFINT_TYPICAL_MV * 4095U) / vref_raw;
+  vsense_uv =
+      ((int64_t)temperature_raw * (int64_t)(*vdd_mv) * 1000LL) /
+      4095LL;
+  temperature_delta_mc =
+      ((TEMPERATURE_V25_UV - vsense_uv) * 1000LL) /
+      TEMPERATURE_SLOPE_UV_C;
+  *temperature_mc = (int32_t)(25000LL + temperature_delta_mc);
+
+  return 1U;
+}
+
+static uint32_t Get_Application_Flash_Used(void)
+{
+  uint32_t image_end = (uint32_t)&__flash_image_end__;
+
+  if ((image_end < APPLICATION_SLOT_ADDRESS) ||
+      (image_end > (APPLICATION_SLOT_ADDRESS + TARGET_SLOT_SIZE_BYTES)))
+  {
+    return TARGET_SLOT_SIZE_BYTES;
+  }
+
+  return image_end - APPLICATION_SLOT_ADDRESS;
+}
+
 static void Send_Status_Response(void)
 {
   char status_buffer[STATUS_BUFFER_SIZE];
   char uid_string[25];
+  uint32_t vdd_mv;
+  int32_t temperature_mc;
+  uint32_t app_used;
+  uint32_t app_free;
+  uint8_t telemetry_valid;
+  uint8_t power_good;
 
   Make_UID_String(uid_string);
+  telemetry_valid = Read_Hardware_Telemetry(
+      &vdd_mv,
+      &temperature_mc
+  );
+  app_used = Get_Application_Flash_Used();
+  app_free = TARGET_SLOT_SIZE_BYTES - app_used;
+  power_good = (uint8_t)(
+      (telemetry_valid != 0U) &&
+      (vdd_mv >= POWER_GOOD_MIN_MV) &&
+      (vdd_mv <= POWER_GOOD_MAX_MV)
+  );
 
   snprintf(
       status_buffer,
@@ -454,6 +597,12 @@ static void Send_Status_Response(void)
       "TARGET=%s,"
       "READY=1,"
       "MAX=%lu,"
+      "VDD_MV=%lu,"
+      "TEMP_MC=%ld,"
+      "APP_USED=%lu,"
+      "APP_FREE=%lu,"
+      "POWER_GOOD=%u,"
+      "TELEMETRY_VALID=%u,"
       "UPTIME_MS=%lu,"
       "RESET=%s,"
       "UART_ERR=%lu,"
@@ -464,6 +613,12 @@ static void Send_Status_Response(void)
       ACTIVE_SLOT,
       TARGET_SLOT,
       (unsigned long)TARGET_SLOT_SIZE_BYTES,
+      (unsigned long)vdd_mv,
+      (long)temperature_mc,
+      (unsigned long)app_used,
+      (unsigned long)app_free,
+      (unsigned int)power_good,
+      (unsigned int)telemetry_valid,
       (unsigned long)HAL_GetTick(),
       reset_cause,
       (unsigned long)uart_error_count,
@@ -855,6 +1010,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   uint32_t last_led_toggle = HAL_GetTick();
 
+  Telemetry_ADC_Init();
   Serial_Send(STARTUP_MESSAGE);
   /* USER CODE END 2 */
 

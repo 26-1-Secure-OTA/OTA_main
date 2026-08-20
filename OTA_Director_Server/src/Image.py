@@ -276,12 +276,13 @@ if __name__ == "__main__":
     # ).start()
     print("[Main] new_chunks watcher started")
 
-    MQTT_BROKER = "172.20.10.7"
+    MQTT_BROKER = "172.20.10.2"
     MQTT_PORT = 8883
     IMAGE_REPOSITORY_URL = os.environ.get(
         "IMAGE_REPOSITORY_URL",
-        "https://172.23.168.60:8443",
+        "https://localhost:8443",
     )
+
     WATCH_DIR = "../Image_Repo/meta"
     files_path = "./data/update_image.tar.xz"
 

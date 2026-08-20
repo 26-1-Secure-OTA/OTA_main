@@ -2233,12 +2233,18 @@ class Installer:
                     f"{name} must be numeric: {raw_value}"
                 ) from exc
 
-        power_percent = optional_environment_float(
-            "OTA_POWER_PERCENT"
-        )
-        temperature_c = optional_environment_float(
-            "OTA_TEMPERATURE_C"
-        )
+        if data_source == "SIMULATOR":
+            power_percent = optional_environment_float(
+                "OTA_POWER_PERCENT"
+            )
+            temperature_c = optional_environment_float(
+                "OTA_TEMPERATURE_C"
+            )
+        else:
+            # Physical-board telemetry must come from STATUS, never
+            # from environment overrides.
+            power_percent = None
+            temperature_c = None
 
         campaign_id = (
             datetime.now(

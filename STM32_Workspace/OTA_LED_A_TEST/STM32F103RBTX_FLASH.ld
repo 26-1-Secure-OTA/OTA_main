@@ -149,6 +149,9 @@ SECTIONS
 
   } >RAM AT> FLASH
 
+  /* End of bytes stored in the active application slot. */
+  __flash_image_end__ = LOADADDR(.data) + SIZEOF(.data);
+
   /* Uninitialized data section into "RAM" Ram type memory */
   . = ALIGN(4);
   .bss :

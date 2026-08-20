@@ -31,6 +31,14 @@ class OtaBaselineTests(unittest.TestCase):
             "uart_error_count": 0,
             "health": "OK",
             "link_response_ms": 12.5,
+            "supply_voltage_mv": 3294,
+            "temperature_mc": 31420,
+            "temperature_c": 31.42,
+            "app_flash_used_bytes": 17708,
+            "app_flash_free_bytes": 31444,
+            "app_flash_free_ratio": 31444 / 49152,
+            "power_good": True,
+            "telemetry_valid": True,
         }
         self.artifact = {
             "status": "OK",
@@ -72,7 +80,9 @@ class OtaBaselineTests(unittest.TestCase):
             "STATUS,stm32-led-001,"
             "UID=12345678ABCDEF0011223344,"
             "VER=1.0.1,ACTIVE=A,TARGET=B,"
-            "READY=1,MAX=49152,UPTIME_MS=125340,"
+            "READY=1,MAX=49152,VDD_MV=3294,TEMP_MC=31420,"
+            "APP_USED=17708,APP_FREE=31444,POWER_GOOD=1,"
+            "TELEMETRY_VALID=1,UPTIME_MS=125340,"
             "RESET=POWER_ON,UART_ERR=0,HEALTH=OK\r\n"
         )
 
@@ -89,6 +99,13 @@ class OtaBaselineTests(unittest.TestCase):
         self.assertEqual(status["reset_cause"], "POWER_ON")
         self.assertEqual(status["uart_error_count"], 0)
         self.assertEqual(status["health"], "OK")
+        self.assertEqual(status["supply_voltage_mv"], 3294)
+        self.assertEqual(status["temperature_mc"], 31420)
+        self.assertEqual(status["temperature_c"], 31.42)
+        self.assertEqual(status["app_flash_used_bytes"], 17708)
+        self.assertEqual(status["app_flash_free_bytes"], 31444)
+        self.assertTrue(status["power_good"])
+        self.assertTrue(status["telemetry_valid"])
 
     def test_rejects_duplicate_or_empty_status_fields(self):
         invalid_responses = (
@@ -181,12 +198,23 @@ class OtaBaselineTests(unittest.TestCase):
         self.assertEqual(features["previous_failures"], 1)
         self.assertEqual(features["recent_reset_count"], 1)
         self.assertEqual(features["link_response_ms"], 12.5)
+        self.assertEqual(features["supply_voltage_mv"], 3294)
+        self.assertTrue(features["power_good"])
+        self.assertTrue(features["telemetry_valid"])
+        self.assertAlmostEqual(
+            features["app_flash_free_ratio"],
+            31444 / 49152,
+        )
 
     def test_feature_validation(self):
         invalid_cases = (
             {"power_percent": 101},
             {"temperature_c": "hot"},
             {"status": {"link_response_ms": -1}},
+            {"status": {"supply_voltage_mv": 6000}},
+            {"status": {"power_good": 1}},
+            {"status": {"telemetry_valid": "yes"}},
+            {"status": {"app_flash_free_ratio": 1.1}},
             {"artifact": {"length": 0}},
             {"artifact": {"length": 49153}},
         )

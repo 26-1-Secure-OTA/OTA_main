@@ -348,6 +348,24 @@ class SecondarySerial:
         health = values.get(
             "HEALTH"
         )
+        vdd_value = values.get(
+            "VDD_MV"
+        )
+        temperature_value = values.get(
+            "TEMP_MC"
+        )
+        app_used_value = values.get(
+            "APP_USED"
+        )
+        app_free_value = values.get(
+            "APP_FREE"
+        )
+        power_good_value = values.get(
+            "POWER_GOOD"
+        )
+        telemetry_valid_value = values.get(
+            "TELEMETRY_VALID"
+        )
 
         if (
             uid is not None
@@ -386,6 +404,27 @@ class SecondarySerial:
                 else None
             )
 
+            supply_voltage_mv = (
+                int(vdd_value)
+                if vdd_value is not None
+                else None
+            )
+            temperature_mc = (
+                int(temperature_value)
+                if temperature_value is not None
+                else None
+            )
+            app_flash_used_bytes = (
+                int(app_used_value)
+                if app_used_value is not None
+                else None
+            )
+            app_flash_free_bytes = (
+                int(app_free_value)
+                if app_free_value is not None
+                else None
+            )
+
         except ValueError as exc:
             raise FirmwareTransferError(
                 "invalid numeric STATUS value: "
@@ -408,6 +447,68 @@ class SecondarySerial:
             raise FirmwareTransferError(
                 "invalid UART_ERR value: "
                 f"{uart_error_count}"
+            )
+
+        if (
+            supply_voltage_mv is not None
+            and not 0 <= supply_voltage_mv <= 5000
+        ):
+            raise FirmwareTransferError(
+                "invalid VDD_MV value: "
+                f"{supply_voltage_mv}"
+            )
+
+        if (
+            temperature_mc is not None
+            and not -40000 <= temperature_mc <= 125000
+        ):
+            raise FirmwareTransferError(
+                "invalid TEMP_MC value: "
+                f"{temperature_mc}"
+            )
+
+        for field_name, field_value in (
+            ("POWER_GOOD", power_good_value),
+            ("TELEMETRY_VALID", telemetry_valid_value),
+        ):
+            if (
+                field_value is not None
+                and field_value not in ("0", "1")
+            ):
+                raise FirmwareTransferError(
+                    f"invalid {field_name} value: "
+                    f"{field_value}"
+                )
+
+        if (
+            app_flash_used_bytes is not None
+            and app_flash_used_bytes < 0
+        ):
+            raise FirmwareTransferError(
+                "invalid APP_USED value: "
+                f"{app_flash_used_bytes}"
+            )
+
+        if (
+            app_flash_free_bytes is not None
+            and app_flash_free_bytes < 0
+        ):
+            raise FirmwareTransferError(
+                "invalid APP_FREE value: "
+                f"{app_flash_free_bytes}"
+            )
+
+        if (
+            app_flash_used_bytes is not None
+            and app_flash_free_bytes is not None
+            and (
+                app_flash_used_bytes
+                + app_flash_free_bytes
+                != max_size
+            )
+        ):
+            raise FirmwareTransferError(
+                "APP_USED + APP_FREE does not match MAX"
             )
 
         valid_reset_causes = {
@@ -461,6 +562,30 @@ class SecondarySerial:
                 uart_error_count
             ),
             "health": health,
+            "supply_voltage_mv": supply_voltage_mv,
+            "temperature_mc": temperature_mc,
+            "temperature_c": (
+                temperature_mc / 1000.0
+                if temperature_mc is not None
+                else None
+            ),
+            "app_flash_used_bytes": app_flash_used_bytes,
+            "app_flash_free_bytes": app_flash_free_bytes,
+            "app_flash_free_ratio": (
+                app_flash_free_bytes / max_size
+                if app_flash_free_bytes is not None
+                else None
+            ),
+            "power_good": (
+                power_good_value == "1"
+                if power_good_value is not None
+                else None
+            ),
+            "telemetry_valid": (
+                telemetry_valid_value == "1"
+                if telemetry_valid_value is not None
+                else None
+            ),
         }
 
     def get_status(

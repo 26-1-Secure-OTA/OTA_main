@@ -6,7 +6,11 @@ from typing import Optional
 
 FEATURE_NAMES = (
     "power_percent",
+    "supply_voltage_mv",
+    "power_good",
     "temperature_c",
+    "telemetry_valid",
+    "app_flash_free_ratio",
     "free_flash_ratio",
     "link_response_ms",
     "recent_retry_rate",
@@ -154,8 +158,43 @@ def collect_features(
                 "power_percent must be between 0 and 100"
             )
 
+    if temperature_c is None:
+        temperature_c = status.get("temperature_c")
+
     if temperature_c is not None and not _is_number(temperature_c):
         raise FeatureCollectionError("temperature_c must be numeric")
+
+    supply_voltage_mv = status.get("supply_voltage_mv")
+    if supply_voltage_mv is not None:
+        if (
+            not isinstance(supply_voltage_mv, int)
+            or isinstance(supply_voltage_mv, bool)
+            or not 0 <= supply_voltage_mv <= 5000
+        ):
+            raise FeatureCollectionError(
+                "supply_voltage_mv must be an integer from 0 to 5000"
+            )
+
+    power_good = status.get("power_good")
+    if power_good is not None and not isinstance(power_good, bool):
+        raise FeatureCollectionError("power_good must be boolean")
+
+    telemetry_valid = status.get("telemetry_valid")
+    if (
+        telemetry_valid is not None
+        and not isinstance(telemetry_valid, bool)
+    ):
+        raise FeatureCollectionError("telemetry_valid must be boolean")
+
+    app_flash_free_ratio = status.get("app_flash_free_ratio")
+    if app_flash_free_ratio is not None:
+        if (
+            not _is_number(app_flash_free_ratio)
+            or not 0.0 <= app_flash_free_ratio <= 1.0
+        ):
+            raise FeatureCollectionError(
+                "app_flash_free_ratio must be between 0 and 1"
+            )
 
     image_size = artifact_info.get("length")
     if image_size is not None:
@@ -215,7 +254,11 @@ def collect_features(
 
     return {
         "power_percent": power_percent,
+        "supply_voltage_mv": supply_voltage_mv,
+        "power_good": power_good,
         "temperature_c": temperature_c,
+        "telemetry_valid": telemetry_valid,
+        "app_flash_free_ratio": app_flash_free_ratio,
         "free_flash_ratio": free_flash_ratio,
         "link_response_ms": link_response_ms,
         "recent_retry_rate": recent_retry_rate,
