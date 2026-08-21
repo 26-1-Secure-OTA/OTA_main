@@ -159,20 +159,25 @@ def collect_features(
             )
 
     if temperature_c is None:
-        temperature_c = status.get("temperature_c")
+        temperature_c = status.get(
+            "temperature_median_c",
+            status.get("temperature_c"),
+        )
 
     if temperature_c is not None and not _is_number(temperature_c):
         raise FeatureCollectionError("temperature_c must be numeric")
 
-    supply_voltage_mv = status.get("supply_voltage_mv")
+    supply_voltage_mv = status.get(
+        "supply_voltage_median_mv",
+        status.get("supply_voltage_mv"),
+    )
     if supply_voltage_mv is not None:
         if (
-            not isinstance(supply_voltage_mv, int)
-            or isinstance(supply_voltage_mv, bool)
+            not _is_number(supply_voltage_mv)
             or not 0 <= supply_voltage_mv <= 5000
         ):
             raise FeatureCollectionError(
-                "supply_voltage_mv must be an integer from 0 to 5000"
+                "supply_voltage_mv must be numeric from 0 to 5000"
             )
 
     power_good = status.get("power_good")
@@ -229,7 +234,10 @@ def collect_features(
         if not 0.0 <= free_flash_ratio <= 1.0:
             raise FeatureCollectionError("free_flash_ratio is out of range")
 
-    link_response_ms = status.get("link_response_ms")
+    link_response_ms = status.get(
+        "link_response_median_ms",
+        status.get("link_response_ms"),
+    )
     if link_response_ms is not None:
         if not _is_number(link_response_ms) or link_response_ms < 0:
             raise FeatureCollectionError(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import statistics
 import struct
 import time
 from pathlib import Path
@@ -50,7 +51,28 @@ class SecondarySerial:
     }
 
     @staticmethod
-    def discover_secondaries() -> dict:
+    def discover_secondaries(
+        status_sample_count: int = 1,
+        status_sample_interval: float = 0.05,
+    ) -> dict:
+        if (
+            not isinstance(status_sample_count, int)
+            or isinstance(status_sample_count, bool)
+            or status_sample_count <= 0
+        ):
+            raise ValueError(
+                "status_sample_count must be a positive integer"
+            )
+
+        if (
+            not isinstance(status_sample_interval, (int, float))
+            or isinstance(status_sample_interval, bool)
+            or status_sample_interval < 0
+        ):
+            raise ValueError(
+                "status_sample_interval must be non-negative"
+            )
+
         discovered = {}
 
         for port_info in list_ports.comports():
@@ -66,9 +88,14 @@ class SecondarySerial:
                     read_timeout=0.5,
                     open_delay=2.0,
                 ) as secondary:
-                    status = secondary.get_status(
-                        timeout_seconds=5.0
+                    sample_result = secondary.get_status_samples(
+                        sample_count=status_sample_count,
+                        timeout_seconds=5.0,
+                        interval_seconds=status_sample_interval,
                     )
+
+                    status = sample_result["status"]
+                    status_samples = sample_result["samples"]
 
                 ecu_serial = status["ecu_serial"]
 
@@ -90,6 +117,7 @@ class SecondarySerial:
                 discovered[ecu_serial] = {
                     "port": port,
                     "status": status,
+                    "status_samples": status_samples,
                 }
 
                 print(
@@ -100,7 +128,10 @@ class SecondarySerial:
                     f"UID={status.get('uid')}, "
                     f"VER={status.get('version')}, "
                     f"HEALTH={status.get('health')}, "
-                    f"RESPONSE={status.get('link_response_ms')}ms"
+                    f"RESPONSE={status.get('link_response_ms')}ms, "
+                    f"AI_RESPONSE_MEDIAN="
+                    f"{status.get('link_response_median_ms')}ms, "
+                    f"SAMPLES={status.get('status_sample_count')}"
                 )
 
             except Exception as exc:
@@ -643,6 +674,115 @@ class SecondarySerial:
         )
 
         return status
+
+    def get_status_samples(
+        self,
+        sample_count: int = 5,
+        timeout_seconds: float = 5.0,
+        interval_seconds: float = 0.05,
+    ) -> dict:
+        """Read repeated STATUS samples and add AI-only median fields.
+
+        The returned ``status`` is based on the final raw sample so the
+        existing Safety Policy continues to evaluate an actual latest value.
+        Median fields are separate and are consumed only by AI features.
+        """
+
+        if (
+            not isinstance(sample_count, int)
+            or isinstance(sample_count, bool)
+            or sample_count <= 0
+        ):
+            raise ValueError("sample_count must be a positive integer")
+
+        if (
+            not isinstance(interval_seconds, (int, float))
+            or isinstance(interval_seconds, bool)
+            or interval_seconds < 0
+        ):
+            raise ValueError("interval_seconds must be non-negative")
+
+        samples = []
+
+        for sample_index in range(sample_count):
+            samples.append(
+                self.get_status(timeout_seconds=timeout_seconds)
+            )
+
+            if (
+                sample_index + 1 < sample_count
+                and interval_seconds > 0
+            ):
+                time.sleep(interval_seconds)
+
+        identity_fields = (
+            "ecu_serial",
+            "uid",
+            "version",
+            "active_slot",
+            "target_slot",
+            "max_size",
+        )
+        first = samples[0]
+
+        for sample_index, sample in enumerate(samples[1:], start=2):
+            for field in identity_fields:
+                if sample.get(field) != first.get(field):
+                    raise FirmwareTransferError(
+                        "STATUS identity/state changed during sampling: "
+                        f"sample={sample_index}, field={field}, "
+                        f"first={first.get(field)!r}, "
+                        f"current={sample.get(field)!r}"
+                    )
+
+        def numeric_values(field: str) -> list:
+            return [
+                sample[field]
+                for sample in samples
+                if (
+                    isinstance(sample.get(field), (int, float))
+                    and not isinstance(sample.get(field), bool)
+                )
+            ]
+
+        measurements = {
+            "link_response_ms": numeric_values("link_response_ms"),
+            "supply_voltage_mv": numeric_values("supply_voltage_mv"),
+            "temperature_c": numeric_values("temperature_c"),
+        }
+
+        status = dict(samples[-1])
+        status["status_sample_count"] = len(samples)
+        status["status_sample_values"] = measurements
+
+        median_fields = (
+            ("link_response_ms", "link_response_median_ms", 3),
+            ("supply_voltage_mv", "supply_voltage_median_mv", 3),
+            ("temperature_c", "temperature_median_c", 3),
+        )
+
+        for source, target, digits in median_fields:
+            values = measurements[source]
+            status[target] = (
+                round(statistics.median(values), digits)
+                if len(values) == len(samples)
+                else None
+            )
+
+        telemetry_values = [
+            sample.get("telemetry_valid")
+            for sample in samples
+        ]
+        status["telemetry_valid_all"] = (
+            all(value is True for value in telemetry_values)
+            if all(value is not None for value in telemetry_values)
+            else None
+        )
+
+        return {
+            "status": status,
+            "samples": samples,
+        }
 
     @staticmethod
     def detect_firmware_slot(

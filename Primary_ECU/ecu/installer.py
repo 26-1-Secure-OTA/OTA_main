@@ -1167,7 +1167,6 @@ class Installer:
         from .secondary_serial import (
             SecondarySerial,
         )
-
         parsed = [
             (
                 item,
@@ -2183,6 +2182,10 @@ class Installer:
         from .secondary_serial import (
             SecondarySerial,
         )
+        from ai.anomaly_scorer import (
+            FIXED_ORDER,
+            schedule_allow_ecus,
+        )
 
         expected_secondary_statuses = (
             expected_secondary_statuses
@@ -2255,11 +2258,7 @@ class Installer:
             )
         )
 
-        fixed_order = [
-            "stm32-led-001",
-            "stm32-led-002",
-            "stm32-led-003",
-        ]
+        fixed_order = list(FIXED_ORDER)
 
         target_ids = {
             item.get(
@@ -2273,10 +2272,25 @@ class Installer:
 
         discovered = (
             SecondarySerial
-            .discover_secondaries()
+            .discover_secondaries(
+                status_sample_count=5,
+                status_sample_interval=0.05,
+            )
         )
 
         results = []
+        schedule_result = {
+            "requested_mode": "OFF",
+            "used_mode": "OFF",
+            "fallback_reason": None,
+            "recommended_order": [],
+            "execution_order": [],
+            "scores": {},
+            "profile_version": None,
+            "profile_hash": None,
+        }
+        recommended_rank = {}
+        execution_rank = {}
 
         def experiment_row(
             *,
@@ -2288,6 +2302,7 @@ class Installer:
         ) -> dict:
             observed_status = status or {}
             artifact = artifact_info or {}
+            score = schedule_result["scores"].get(expected_ecu, {})
 
             return {
                 "scenario_id": scenario_id,
@@ -2317,11 +2332,24 @@ class Installer:
                     "uart_error_count"
                 ),
                 "health": observed_status.get("health"),
+                "ai_mode_requested": schedule_result["requested_mode"],
+                "ai_mode_used": schedule_result["used_mode"],
+                "ai_fallback_reason": schedule_result["fallback_reason"],
+                "ai_risk_score": score.get("risk_score"),
+                "ai_feature_deviations": score.get("deviations"),
+                "ai_feature_contributions": score.get("contributions"),
+                "ai_recommended_rank": recommended_rank.get(expected_ecu),
+                "ai_execution_rank": execution_rank.get(expected_ecu),
+                "ai_profile_version": schedule_result["profile_version"],
+                "ai_profile_hash": schedule_result["profile_hash"],
             }
 
-        for expected_ecu in (
-            fixed_order
-        ):
+        # Complete Safety Policy and feature collection for every target before
+        # scheduling. HOLD/BLOCK boards are never exposed to the AI scheduler.
+        preflight = {}
+        allow_context = {}
+
+        for expected_ecu in fixed_order:
             if (
                 expected_ecu
                 not in target_ids
@@ -2423,6 +2451,77 @@ class Installer:
                     for name in FEATURE_NAMES
                 }
 
+            preflight[expected_ecu] = {
+                "secondary_info": secondary_info,
+                "status": status,
+                "artifact_info": artifact_info,
+                "registry_entry": registry_entry,
+                "decision": decision,
+                "features": features,
+            }
+
+            if decision["decision"] == "ALLOW":
+                allow_context[expected_ecu] = {
+                    "status": status,
+                    "features": features,
+                }
+
+        ai_mode = os.environ.get("OTA_AI_MODE", "ACTIVE").upper()
+        profile_path = os.environ.get(
+            "OTA_NORMAL_PROFILE",
+            "./models/normal-profile-v1.json",
+        )
+        schedule_result = schedule_allow_ecus(
+            allow_context=allow_context,
+            profile_path=profile_path,
+            requested_mode=ai_mode,
+            fixed_order=fixed_order,
+        )
+        recommended_rank = {
+            secondary_id: index
+            for index, secondary_id in enumerate(
+                schedule_result["recommended_order"],
+                start=1,
+            )
+        }
+        execution_rank = {
+            secondary_id: index
+            for index, secondary_id in enumerate(
+                schedule_result["execution_order"],
+                start=1,
+            )
+        }
+
+        scheduled_allow = iter(schedule_result["execution_order"])
+        execution_order = [
+            (
+                next(scheduled_allow)
+                if preflight[secondary_id]["decision"]["decision"]
+                == "ALLOW"
+                else secondary_id
+            )
+            for secondary_id in fixed_order
+            if secondary_id in preflight
+        ]
+
+        print(
+            "[AI Scheduler] "
+            f"requested={schedule_result['requested_mode']}, "
+            f"used={schedule_result['used_mode']}, "
+            f"recommended={schedule_result['recommended_order']}, "
+            f"execution={schedule_result['execution_order']}, "
+            f"fallback={schedule_result['fallback_reason']}"
+        )
+
+        for expected_ecu in execution_order:
+            preflight_entry = preflight[expected_ecu]
+            secondary_info = preflight_entry["secondary_info"]
+            status = preflight_entry["status"]
+            artifact_info = preflight_entry["artifact_info"]
+            registry_entry = preflight_entry["registry_entry"]
+            decision = preflight_entry["decision"]
+            features = preflight_entry["features"]
+
             if (
                 decision["decision"]
                 != "ALLOW"
@@ -2483,6 +2582,10 @@ class Installer:
                         False
                     ),
                     "success": None,
+                    "ai_mode_used": schedule_result["used_mode"],
+                    "ai_risk_score": None,
+                    "ai_recommended_rank": None,
+                    "ai_execution_rank": None,
                 }
 
                 results.append(
@@ -2550,9 +2653,12 @@ class Installer:
 
             print(
                 "[Primary ECU] "
-                "Fixed-order update: "
+                f"{schedule_result['used_mode']}-order update: "
                 f"ECU={expected_ecu}, "
-                f"PORT={port}"
+                f"PORT={port}, "
+                f"RISK="
+                f"{schedule_result['scores'].get(expected_ecu, {}).get('risk_score')}, "
+                f"RANK={execution_rank.get(expected_ecu)}"
             )
 
             started_at = (
@@ -2608,6 +2714,14 @@ class Installer:
             ] = (
                 update_duration_ms
             )
+
+            score = schedule_result["scores"].get(expected_ecu, {})
+            result["ai_mode_used"] = schedule_result["used_mode"]
+            result["ai_risk_score"] = score.get("risk_score")
+            result["ai_recommended_rank"] = recommended_rank.get(
+                expected_ecu
+            )
+            result["ai_execution_rank"] = execution_rank.get(expected_ecu)
 
             results.append(
                 result
