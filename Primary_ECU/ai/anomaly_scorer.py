@@ -120,73 +120,15 @@ def schedule_allow_ecus(
     requested_mode: str = "ACTIVE",
     fixed_order=FIXED_ORDER,
 ) -> dict:
+    # Compatibility wrapper: legacy callers keep OFF/SHADOW/ACTIVE while the
+    # implementation uses separate model/apply modes internally.
+    from .risk_engine import RiskEngine
+
     requested_mode = str(requested_mode).upper()
-    fixed_allow = [ecu for ecu in fixed_order if ecu in allow_context]
-    result = {
-        "requested_mode": requested_mode,
-        "used_mode": "OFF",
-        "fallback_reason": None,
-        "recommended_order": list(fixed_allow),
-        "execution_order": list(fixed_allow),
-        "scores": {},
-        "profile_version": None,
-        "profile_hash": None,
-    }
-
-    if requested_mode not in VALID_MODES:
-        result["fallback_reason"] = "INVALID_AI_MODE"
-        return result
-    if requested_mode == "OFF" or not fixed_allow:
-        return result
-
-    try:
-        profile, profile_hash = load_profile(profile_path)
-        for secondary_id in fixed_allow:
-            context = allow_context[secondary_id]
-            status = context.get("status") or {}
-            if (
-                status.get("telemetry_valid") is not True
-                or status.get("telemetry_valid_all") is not True
-            ):
-                raise AnomalyScoringError("INVALID_TELEMETRY")
-            result["scores"][secondary_id] = score_secondary(
-                secondary_id=secondary_id,
-                uid=status.get("uid"),
-                features=context.get("features") or {},
-                profile=profile,
-            )
-
-        tie_break = {ecu: index for index, ecu in enumerate(fixed_order)}
-        recommended = sorted(
-            fixed_allow,
-            key=lambda ecu: (
-                result["scores"][ecu]["risk_score"],
-                tie_break[ecu],
-            ),
-        )
-        result.update({
-            "used_mode": requested_mode,
-            "recommended_order": recommended,
-            "execution_order": (
-                recommended if requested_mode == "ACTIVE" else fixed_allow
-            ),
-            "profile_version": profile.get("profile_version"),
-            "profile_hash": profile_hash,
-        })
-    except Exception as exc:
-        reason = str(exc)
-        known_reasons = {
-            "PROFILE_NOT_FOUND",
-            "PROFILE_INVALID",
-            "PROFILE_SCHEMA_MISMATCH",
-            "SECONDARY_NOT_IN_PROFILE",
-            "PROFILE_UID_MISMATCH",
-            "FEATURE_MISSING",
-            "INVALID_TELEMETRY",
-        }
-        result["fallback_reason"] = (
-            reason if reason in known_reasons else "SCORER_EXCEPTION"
-        )
-        result["scores"] = {}
-
+    result = RiskEngine(
+        profile_path=profile_path,
+        fixed_order=fixed_order,
+    ).rank(allow_context, model_mode=requested_mode).to_dict()
+    if result["used_mode"] == "STATISTICAL":
+        result["used_mode"] = requested_mode
     return result
