@@ -31,6 +31,10 @@ from .storage import Storage
 from .secondary_state import SecondaryStateStore
 from .safety_policy import evaluate_policy
 from .experiment_logger import ExperimentLogger
+from .failure_taxonomy import (
+    classify_failure,
+    label_for_outcome,
+)
 from .feature_collector import (
     FEATURE_NAMES,
     FeatureCollectionError,
@@ -1744,6 +1748,8 @@ class Installer:
         port: str,
         expected_ecu: str,
         expected_secondary_status: Optional[dict] = None,
+        expected_uid: Optional[str] = None,
+        policy_artifact_info: Optional[dict] = None,
     ) -> dict:
         """Install the matching .bin on the currently connected Secondary.
 
@@ -1754,6 +1760,10 @@ class Installer:
         from .secondary_serial import SecondarySerial
 
         target = None
+        before_status = None
+        policy_recheck = None
+        failure_stage = "PRECHECK"
+        update_attempted = False
 
         verified_bins = [
             item
@@ -1783,6 +1793,7 @@ class Installer:
                 # ---------------------------------------------------------
                 # 업데이트 직전 Secondary STATUS
                 # ---------------------------------------------------------
+                failure_stage = "STATUS"
                 before_status = secondary.get_status()
 
                 if before_status["ecu_serial"] != expected_ecu:
@@ -1793,11 +1804,53 @@ class Installer:
                         f"port={port}"
                     )
 
-                if not before_status["ready"]:
-                    raise RuntimeError(
-                        "Secondary is not ready: "
-                        f"{before_status['raw']}"
+                # ---------------------------------------------------------
+                # AI ranking 이후, FW_BEGIN 직전 Fresh STATUS Safety 재검사
+                # ---------------------------------------------------------
+                failure_stage = "PRECHECK"
+                policy_recheck = evaluate_policy(
+                    expected_ecu=expected_ecu,
+                    status=before_status,
+                    artifact_info=policy_artifact_info,
+                    expected_uid=expected_uid,
+                )
+
+                if policy_recheck["decision"] != "ALLOW":
+                    self.secondary_states.transition(
+                        expected_ecu,
+                        policy_recheck["decision"],
+                        artifact=(
+                            policy_artifact_info.get("artifact")
+                            if policy_artifact_info
+                            else None
+                        ),
+                        firmware_sha256=(
+                            policy_artifact_info.get("sha256")
+                            if policy_artifact_info
+                            else None
+                        ),
+                        ok=None,
+                        reason=policy_recheck["reason_code"],
+                        details={
+                            "policy_phase": "PRE_TRANSFER_RECHECK",
+                            "policy": policy_recheck,
+                            "status": before_status,
+                        },
                     )
+                    return {
+                        "ok": False,
+                        "skipped": True,
+                        "ecu_serial": expected_ecu,
+                        "decision": policy_recheck["decision"],
+                        "reason_code": policy_recheck["reason_code"],
+                        "reason": policy_recheck["reason"],
+                        "update_attempted": False,
+                        "success": None,
+                        "secondary_before": before_status,
+                        "policy_recheck": policy_recheck,
+                        "failure_stage": None,
+                        "failure_reason_code": None,
+                    }
 
                 # ---------------------------------------------------------
                 # 다운로드 전 STATUS와 설치 직전 STATUS 일관성 검사
@@ -1936,6 +1989,8 @@ class Installer:
                 # ---------------------------------------------------------
                 transfer_started = time.monotonic()
 
+                failure_stage = "TRANSFER"
+                update_attempted = True
                 transfer_result = secondary.send_firmware(
                     firmware_path=target["path"],
                     expected_sha256=target["sha256"],
@@ -1962,6 +2017,8 @@ class Installer:
                     if transfer_duration_ms > 0
                     else None
                 )
+
+                failure_stage = "SLOT_SWITCH"
 
                 # ---------------------------------------------------------
                 # STAGED -> ACTIVATING
@@ -2016,9 +2073,12 @@ class Installer:
                     },
                 )
 
+                failure_stage = "REBOOT"
                 after_status = secondary.get_status(
                     timeout_seconds=10.0
                 )
+
+                failure_stage = "POST_CHECK"
 
                 # ---------------------------------------------------------
                 # 사후 ECU ID 검사
@@ -2137,9 +2197,17 @@ class Installer:
                         "retry_count",
                         0,
                     ),
+                    "update_attempted": True,
+                    "failure_stage": None,
+                    "failure_reason_code": None,
+                    "policy_recheck": policy_recheck,
                 }
 
         except Exception as exc:
+            failure = classify_failure(
+                exc,
+                stage_hint=failure_stage,
+            )
             self.secondary_states.transition(
                 expected_ecu,
                 "FAILED",
@@ -2157,6 +2225,8 @@ class Installer:
                 reason=str(exc),
                 details={
                     "port": port,
+                    "failure_stage": failure.stage,
+                    "failure_reason_code": failure.reason_code,
                 },
             )
 
@@ -2170,6 +2240,13 @@ class Installer:
                 "skipped": False,
                 "ecu_serial": expected_ecu,
                 "reason": str(exc),
+                "failure_stage": failure.stage,
+                "failure_reason_code": failure.reason_code,
+                "board_related": failure.board_related,
+                "ml_label_eligible": failure.ml_label_eligible,
+                "update_attempted": update_attempted,
+                "secondary_before": before_status,
+                "policy_recheck": policy_recheck,
                 # The current Serial protocol performs no retries.
                 "retry_count": 0,
             }
@@ -2305,10 +2382,13 @@ class Installer:
             score = schedule_result["scores"].get(expected_ecu, {})
 
             return {
+                "attempt_id": f"{campaign_id}:{expected_ecu}",
                 "scenario_id": scenario_id,
                 "campaign_id": campaign_id,
                 "secondary_id": expected_ecu,
                 "data_source": data_source,
+                "feature_schema_version": 2,
+                "features": dict(features),
                 "current_version": observed_status.get("version"),
                 "target_version": artifact.get("target_version"),
                 **features,
@@ -2326,8 +2406,12 @@ class Installer:
                 "active_slot_after": None,
                 "failure_stage": None,
                 "failure_reason_code": None,
+                "ml_label_eligible": False,
+                "ml_label": None,
                 "uptime_ms": observed_status.get("uptime_ms"),
                 "reset_cause": observed_status.get("reset_cause"),
+                "boot_id": observed_status.get("boot_id"),
+                "reset_context": observed_status.get("reset_context"),
                 "uart_error_count": observed_status.get(
                     "uart_error_count"
                 ),
@@ -2680,6 +2764,12 @@ class Installer:
                             expected_ecu
                         )
                     ),
+                    expected_uid=(
+                        registry_entry.get("uid")
+                    ),
+                    policy_artifact_info=(
+                        artifact_info
+                    ),
                 )
             )
 
@@ -2691,28 +2781,31 @@ class Installer:
                 * 1000
             )
 
-            result[
-                "decision"
-            ] = "ALLOW"
-
-            result[
-                "reason_code"
-            ] = "POLICY_PASSED"
-
-            result[
-                "update_attempted"
-            ] = True
-
-            result[
-                "success"
-            ] = bool(
-                result.get("ok")
+            effective_decision = (
+                result.get("policy_recheck")
+                or decision
             )
+            update_attempted = (
+                result.get("update_attempted")
+                is True
+            )
+            success = (
+                bool(result.get("ok"))
+                if update_attempted
+                else None
+            )
+
+            result["decision"] = effective_decision["decision"]
+            result["reason_code"] = effective_decision["reason_code"]
+            result["update_attempted"] = update_attempted
+            result["success"] = success
 
             result[
                 "update_duration_ms"
             ] = (
                 update_duration_ms
+                if update_attempted
+                else None
             )
 
             score = schedule_result["scores"].get(expected_ecu, {})
@@ -2746,13 +2839,28 @@ class Installer:
                 expected_ecu=expected_ecu,
                 status=before_status,
                 artifact_info=artifact_info,
-                decision=decision,
+                decision=effective_decision,
                 features=features,
             )
+            failure_reason_code = result.get(
+                "failure_reason_code"
+            )
+            ml_label_eligible, ml_label = label_for_outcome(
+                update_attempted=update_attempted,
+                success=success,
+                reason_code=failure_reason_code,
+            )
             log_row.update({
-                "update_attempted": True,
-                "success": bool(result.get("ok")),
-                "update_duration_ms": update_duration_ms,
+                "policy_preflight_decision": decision["decision"],
+                "policy_preflight_reason_code": decision["reason_code"],
+                "policy_rechecked": result.get("policy_recheck") is not None,
+                "update_attempted": update_attempted,
+                "success": success,
+                "update_duration_ms": (
+                    update_duration_ms
+                    if update_attempted
+                    else None
+                ),
                 "transfer_duration_ms": result.get(
                     "transfer_duration_ms"
                 ),
@@ -2761,12 +2869,13 @@ class Installer:
                 "slot_switched": result.get("slot_switched"),
                 "version_verified": result.get("version_verified"),
                 "active_slot_after": after_status.get("active_slot"),
-                "failure_stage": (
-                    None if result.get("ok") else "INSTALL"
+                "failure_stage": result.get("failure_stage"),
+                "failure_reason_code": failure_reason_code,
+                "failure_detail": (
+                    None if success is not False else result.get("reason")
                 ),
-                "failure_reason_code": (
-                    None if result.get("ok") else result.get("reason")
-                ),
+                "ml_label_eligible": ml_label_eligible,
+                "ml_label": ml_label,
             })
             logger.append(log_row)
 

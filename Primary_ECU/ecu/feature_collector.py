@@ -3,6 +3,9 @@ import math
 from pathlib import Path
 from typing import Optional
 
+from .failure_taxonomy import legacy_row_label
+from .reset_history import count_recent_unexpected_resets
+
 
 FEATURE_NAMES = (
     "power_percent",
@@ -12,9 +15,12 @@ FEATURE_NAMES = (
     "telemetry_valid",
     "app_flash_free_ratio",
     "free_flash_ratio",
+    "image_size_ratio",
     "link_response_ms",
     "recent_retry_rate",
     "previous_failures",
+    "previous_failure_rate",
+    "history_attempt_count",
     "image_size",
     "recent_reset_count",
 )
@@ -69,9 +75,9 @@ def _read_secondary_history(
 
 def _history_features(
     rows: list[dict],
-    current_uptime_ms: Optional[int],
+    current_status: Optional[dict],
     recent_window: int,
-) -> tuple[float, int, int]:
+) -> tuple[float, int, float, int, int]:
     attempts = [
         row
         for row in rows
@@ -93,38 +99,34 @@ def _history_features(
         else 0.0
     )
 
+    eligible_history = []
+    for row in rows:
+        eligible, label = legacy_row_label(row)
+        if eligible:
+            eligible_history.append((row, label))
+
+    eligible_history = eligible_history[-recent_window:]
+    history_attempt_count = len(eligible_history)
     previous_failures = sum(
-        1
-        for row in rows
-        if (
-            row.get("update_attempted") is True
-            and row.get("success") is False
-        )
+        1 for _, label in eligible_history if label == 1
+    )
+    previous_failure_rate = (
+        previous_failures / history_attempt_count
+        if history_attempt_count
+        else 0.0
     )
 
-    uptimes = [
-        row.get("uptime_ms")
-        for row in rows
-        if (
-            isinstance(row.get("uptime_ms"), int)
-            and not isinstance(row.get("uptime_ms"), bool)
-            and row["uptime_ms"] >= 0
-        )
-    ]
-
-    if current_uptime_ms is not None:
-        uptimes.append(current_uptime_ms)
-
-    uptimes = uptimes[-recent_window:]
-    recent_reset_count = sum(
-        1
-        for previous, current in zip(uptimes, uptimes[1:])
-        if current < previous
+    recent_reset_count = count_recent_unexpected_resets(
+        rows,
+        current_status=current_status,
+        recent_attempt_window=recent_window,
     )
 
     return (
         recent_retry_rate,
         previous_failures,
+        previous_failure_rate,
+        history_attempt_count,
         recent_reset_count,
     )
 
@@ -137,7 +139,7 @@ def collect_features(
     power_percent: float | None = None,
     temperature_c: float | None = None,
     log_path: str = "./logs/ota_experiments.jsonl",
-    recent_window: int = 20,
+    recent_window: int = 10,
 ) -> dict:
     """Collect only values available before an update attempt."""
 
@@ -214,6 +216,7 @@ def collect_features(
 
     max_firmware_size = status.get("max_size")
     free_flash_ratio = None
+    image_size_ratio = None
 
     if max_firmware_size is not None:
         if (
@@ -231,8 +234,11 @@ def collect_features(
         free_flash_ratio = (
             max_firmware_size - image_size
         ) / max_firmware_size
+        image_size_ratio = image_size / max_firmware_size
         if not 0.0 <= free_flash_ratio <= 1.0:
             raise FeatureCollectionError("free_flash_ratio is out of range")
+        if not 0.0 <= image_size_ratio <= 1.0:
+            raise FeatureCollectionError("image_size_ratio is out of range")
 
     link_response_ms = status.get(
         "link_response_median_ms",
@@ -257,8 +263,10 @@ def collect_features(
     (
         recent_retry_rate,
         previous_failures,
+        previous_failure_rate,
+        history_attempt_count,
         recent_reset_count,
-    ) = _history_features(rows, current_uptime_ms, recent_window)
+    ) = _history_features(rows, status, recent_window)
 
     return {
         "power_percent": power_percent,
@@ -268,9 +276,12 @@ def collect_features(
         "telemetry_valid": telemetry_valid,
         "app_flash_free_ratio": app_flash_free_ratio,
         "free_flash_ratio": free_flash_ratio,
+        "image_size_ratio": image_size_ratio,
         "link_response_ms": link_response_ms,
         "recent_retry_rate": recent_retry_rate,
         "previous_failures": previous_failures,
+        "previous_failure_rate": previous_failure_rate,
+        "history_attempt_count": history_attempt_count,
         "image_size": image_size,
         "recent_reset_count": recent_reset_count,
     }

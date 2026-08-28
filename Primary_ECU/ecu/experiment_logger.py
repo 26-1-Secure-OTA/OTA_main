@@ -3,6 +3,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+LOG_SCHEMA_VERSION = 2
+
+
 class ExperimentLogger:
     def __init__(
         self,
@@ -19,12 +22,19 @@ class ExperimentLogger:
         )
 
     def append(self, row: dict) -> None:
+        if not isinstance(row, dict):
+            raise TypeError("experiment row must be a dict")
+
         self.log_path.parent.mkdir(
             parents=True,
             exist_ok=True,
         )
 
         output = dict(row)
+        output.setdefault(
+            "log_schema_version",
+            LOG_SCHEMA_VERSION,
+        )
         output.setdefault(
             "collected_at",
             self.now_iso(),

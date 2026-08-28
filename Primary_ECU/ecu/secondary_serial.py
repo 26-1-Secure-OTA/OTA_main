@@ -64,6 +64,12 @@ VALID_RESET_CONTEXTS = {
     "OTA_ACTIVATION",
     "TRANSFER",
     "BOOT_TEST",
+    "SOFTWARE_REBOOT",
+    "BOOTLOADER_RESET",
+    "MANUAL_RESET",
+    "TRANSFER_RESET",
+    "UNEXPECTED",
+    "UNKNOWN",
 }
 
 
@@ -612,6 +618,9 @@ class SecondarySerial:
             "PIN_RESET",
             "SOFTWARE",
             "WATCHDOG",
+            "BROWN_OUT",
+            "BOOT_FAILURE",
+            "RESET_LOOP",
             "UNKNOWN",
         }
 
