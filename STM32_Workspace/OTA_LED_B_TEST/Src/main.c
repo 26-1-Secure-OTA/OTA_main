@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "../../Common/ota_fault_protocol.h"
 
 /* USER CODE END Includes */
 
@@ -56,6 +57,7 @@ typedef struct
 #define BOOT_FLAG_SLOT_A_MAGIC  0xA55AA55AU
 #define BOOT_FLAG_SLOT_B_MAGIC  0xB007B007U
 #define TARGET_BOOT_FLAG_MAGIC  BOOT_FLAG_SLOT_A_MAGIC
+#define ACTIVE_BOOT_FLAG_MAGIC  BOOT_FLAG_SLOT_B_MAGIC
 #define STARTUP_MESSAGE         "SLOT_B_RUNNING\r\n"
 #define STRINGIFY_INNER(value)  #value
 #define STRINGIFY(value)        STRINGIFY_INNER(value)
@@ -78,7 +80,7 @@ typedef struct
 #define ACTIVE_SLOT             "B"
 #define TARGET_SLOT             "A"
 #define HEALTH_STATUS           "OK"
-#define STATUS_BUFFER_SIZE      384U
+#define STATUS_BUFFER_SIZE      512U
 #ifndef LED_TOGGLE_INTERVAL_MS
 #define LED_TOGGLE_INTERVAL_MS  1000U
 #endif
@@ -93,6 +95,7 @@ typedef struct
 #define TEMPERATURE_SLOPE_UV_C  4300L
 #define POWER_GOOD_MIN_MV       2700U
 #define POWER_GOOD_MAX_MV       3600U
+#define FW_RECEIVE_TIMEOUT_MS   2000U
 
 /* USER CODE END PD */
 
@@ -115,6 +118,10 @@ static uint32_t target_slot_write_address = TARGET_SLOT_ADDRESS;
 static uint8_t fw_data_buffer[FW_DATA_BUFFER_SIZE];
 static uint32_t uart_error_count = 0U;
 static const char *reset_cause = "UNKNOWN";
+static uint16_t boot_id = 0U;
+static OtaFaultState fault_state = {
+    OTA_FAULT_NORMAL, 0U, 0U, OTA_RESET_CONTEXT_NONE
+};
 extern uint8_t __flash_image_end__;
 
 /* USER CODE END PV */
@@ -127,6 +134,9 @@ static void MX_USART2_UART_Init(void);
 static void Serial_Send(const char *message);
 static uint8_t Is_Hex_String(const char *text, uint32_t length);
 static uint8_t Parse_FW_BEGIN(char *line);
+static uint8_t Parse_Fault_Set(char *line);
+static void Initialize_Boot_Tracking(void);
+static void Load_Control_Record(void);
 static HAL_StatusTypeDef Erase_Target_Slot(void);
 static HAL_StatusTypeDef Erase_Boot_Flag(void);
 static HAL_StatusTypeDef Write_Target_Slot_Data(
@@ -135,6 +145,10 @@ static HAL_StatusTypeDef Write_Target_Slot_Data(
     uint16_t length
 );
 static HAL_StatusTypeDef Write_Boot_Flag(void);
+static HAL_StatusTypeDef Write_Control_Record(
+    uint32_t boot_flag,
+    uint32_t reset_context
+);
 static void Calculate_Target_Slot_SHA256(uint8_t digest[32]);
 static uint8_t SHA256_Matches_Expected(const uint8_t digest[32]);
 static void Make_UID_String(char uid_string[25]);
@@ -455,6 +469,45 @@ static const char *Detect_Reset_Cause(void)
   return cause;
 }
 
+static void Initialize_Boot_Tracking(void)
+{
+  RCC->APB1ENR |= RCC_APB1ENR_PWREN | RCC_APB1ENR_BKPEN;
+  PWR->CR |= PWR_CR_DBP;
+
+  boot_id = (uint16_t)(BKP->DR1 + 1U);
+  if (boot_id == 0U)
+  {
+    boot_id = 1U;
+  }
+  BKP->DR1 = boot_id;
+}
+
+static void Load_Control_Record(void)
+{
+  uint32_t magic = *(volatile uint32_t *)(
+      BOOT_FLAG_ADDRESS + OTA_CONTROL_MAGIC_OFFSET
+  );
+  uint32_t scenario = *(volatile uint32_t *)(
+      BOOT_FLAG_ADDRESS + OTA_CONTROL_SCENARIO_OFFSET
+  );
+
+  if ((magic == OTA_CONTROL_RECORD_MAGIC) &&
+      (scenario <= (uint32_t)OTA_FAULT_POST_REBOOT_HEALTH_FAIL))
+  {
+    fault_state.scenario = (OtaFaultScenario)scenario;
+    fault_state.reset_context = *(volatile uint32_t *)(
+        BOOT_FLAG_ADDRESS + OTA_CONTROL_CONTEXT_OFFSET
+    );
+    fault_state.attempt_id = *(volatile uint32_t *)(
+        BOOT_FLAG_ADDRESS + OTA_CONTROL_ATTEMPT_OFFSET
+    );
+    if (fault_state.scenario == OTA_FAULT_BOOT_FAILED)
+    {
+      fault_state.reset_context = OTA_RESET_CONTEXT_BOOT_TEST;
+    }
+  }
+}
+
 static void Telemetry_ADC_Init(void)
 {
   RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_ADCPRE) |
@@ -573,12 +626,32 @@ static void Send_Status_Response(void)
   uint32_t app_free;
   uint8_t telemetry_valid;
   uint8_t power_good;
+  const char *health;
+
+  if ((fault_state.scenario == OTA_FAULT_LINK_DELAY_LOW) ||
+      (fault_state.scenario == OTA_FAULT_LINK_DELAY_MEDIUM) ||
+      (fault_state.scenario == OTA_FAULT_LINK_DELAY_HIGH_ALLOW))
+  {
+    HAL_Delay(fault_state.value);
+  }
 
   Make_UID_String(uid_string);
   telemetry_valid = Read_Hardware_Telemetry(
       &vdd_mv,
       &temperature_mc
   );
+  if ((fault_state.scenario == OTA_FAULT_VOLTAGE_LOW_ALLOW) ||
+      (fault_state.scenario == OTA_FAULT_VOLTAGE_BLOCK))
+  {
+    vdd_mv = fault_state.value;
+    telemetry_valid = 1U;
+  }
+  if ((fault_state.scenario == OTA_FAULT_TEMP_HIGH_ALLOW) ||
+      (fault_state.scenario == OTA_FAULT_TEMP_BLOCK))
+  {
+    temperature_mc = (int32_t)fault_state.value;
+    telemetry_valid = 1U;
+  }
   app_used = Get_Application_Flash_Used();
   app_free = TARGET_SLOT_SIZE_BYTES - app_used;
   power_good = (uint8_t)(
@@ -586,6 +659,9 @@ static void Send_Status_Response(void)
       (vdd_mv >= POWER_GOOD_MIN_MV) &&
       (vdd_mv <= POWER_GOOD_MAX_MV)
   );
+  health = (
+      fault_state.scenario == OTA_FAULT_POST_REBOOT_HEALTH_FAIL
+  ) ? "ERROR" : HEALTH_STATUS;
 
   snprintf(
       status_buffer,
@@ -605,6 +681,10 @@ static void Send_Status_Response(void)
       "TELEMETRY_VALID=%u,"
       "UPTIME_MS=%lu,"
       "RESET=%s,"
+      "RESET_CONTEXT=%s,"
+      "BOOT_ID=%u,"
+      "SCENARIO=%s,"
+      "ATTEMPT_ID=%08lX,"
       "UART_ERR=%lu,"
       "HEALTH=%s\r\n",
       ECU_ID,
@@ -621,8 +701,12 @@ static void Send_Status_Response(void)
       (unsigned int)telemetry_valid,
       (unsigned long)HAL_GetTick(),
       reset_cause,
+      OtaResetContext_Name(fault_state.reset_context),
+      (unsigned int)boot_id,
+      OtaFault_Name(fault_state.scenario),
+      (unsigned long)fault_state.attempt_id,
       (unsigned long)uart_error_count,
-      HEALTH_STATUS
+      health
   );
 
   Serial_Send(status_buffer);
@@ -690,6 +774,99 @@ static uint8_t Parse_FW_BEGIN(char *line)
   expected_firmware_size = (uint32_t)parsed_size;
   memcpy(expected_sha256, sha256_text, SHA256_HEX_LENGTH + 1U);
 
+  return 1U;
+}
+
+static uint8_t Parse_Fault_Set(char *line)
+{
+  char *scenario_text;
+  char *parameter_text;
+  char *value_text;
+  char *attempt_text;
+  char *extra_text;
+  char *parse_end;
+  unsigned long parsed_value;
+  unsigned long parsed_attempt = 0UL;
+  OtaFaultScenario scenario;
+  uint32_t boot_flag;
+  char ack[64];
+
+  if (strncmp(line, "FAULT_SET,", 10U) != 0)
+  {
+    return 0U;
+  }
+
+  (void)strtok(line, ",");
+  scenario_text = strtok(NULL, ",");
+  parameter_text = strtok(NULL, ",");
+  value_text = strtok(NULL, ",");
+  attempt_text = strtok(NULL, ",");
+  extra_text = strtok(NULL, ",");
+
+  if ((scenario_text == NULL) || (parameter_text == NULL) ||
+      (value_text == NULL) || (extra_text != NULL) ||
+      (OtaFault_Parse(scenario_text, &scenario) == 0U) ||
+      (strcmp(parameter_text, OtaFault_Parameter(scenario)) != 0))
+  {
+    Serial_Send("FAULT_BAD_COMMAND\r\n");
+    return 1U;
+  }
+
+  parsed_value = strtoul(value_text, &parse_end, 10);
+  if ((value_text[0] == '\0') || (*parse_end != '\0') ||
+      (OtaFault_Value_Is_Valid(
+          scenario,
+          (uint32_t)parsed_value
+      ) == 0U))
+  {
+    Serial_Send("FAULT_BAD_VALUE\r\n");
+    return 1U;
+  }
+
+  if (attempt_text != NULL)
+  {
+    if ((strlen(attempt_text) != 8U) ||
+        (Is_Hex_String(attempt_text, 8U) == 0U))
+    {
+      Serial_Send("FAULT_BAD_ATTEMPT\r\n");
+      return 1U;
+    }
+    parsed_attempt = strtoul(attempt_text, &parse_end, 16);
+    if (*parse_end != '\0')
+    {
+      Serial_Send("FAULT_BAD_ATTEMPT\r\n");
+      return 1U;
+    }
+  }
+
+  fault_state.scenario = scenario;
+  fault_state.value = (uint32_t)parsed_value;
+  fault_state.attempt_id = (uint32_t)parsed_attempt;
+  fault_state.reset_context = OTA_RESET_CONTEXT_NONE;
+
+  boot_flag = *(volatile uint32_t *)BOOT_FLAG_ADDRESS;
+  if ((boot_flag != BOOT_FLAG_SLOT_A_MAGIC) &&
+      (boot_flag != BOOT_FLAG_SLOT_B_MAGIC))
+  {
+    boot_flag = ACTIVE_BOOT_FLAG_MAGIC;
+  }
+
+  if (Write_Control_Record(
+          boot_flag,
+          OTA_RESET_CONTEXT_NONE
+      ) != HAL_OK)
+  {
+    Serial_Send("FAULT_PERSIST_FAIL\r\n");
+    return 1U;
+  }
+
+  snprintf(
+      ack,
+      sizeof(ack),
+      "FAULT_ACK,%s\r\n",
+      OtaFault_Name(scenario)
+  );
+  Serial_Send(ack);
   return 1U;
 }
 
@@ -784,12 +961,57 @@ static HAL_StatusTypeDef Write_Target_Slot_Data(
   return write_status;
 }
 
-static HAL_StatusTypeDef Write_Boot_Flag(void)
+static HAL_StatusTypeDef Program_Flash_Word(
+    uint32_t address,
+    uint32_t value
+)
+{
+  HAL_StatusTypeDef status;
+
+  if (value == 0xFFFFFFFFUL)
+  {
+    return HAL_OK;
+  }
+
+  status = HAL_FLASH_Program(
+      FLASH_TYPEPROGRAM_HALFWORD,
+      address,
+      (uint16_t)(value & 0xFFFFU)
+  );
+  if (status == HAL_OK)
+  {
+    status = HAL_FLASH_Program(
+        FLASH_TYPEPROGRAM_HALFWORD,
+        address + 2U,
+        (uint16_t)(value >> 16U)
+    );
+  }
+  return status;
+}
+
+static HAL_StatusTypeDef Write_Control_Record(
+    uint32_t boot_flag,
+    uint32_t reset_context
+)
 {
   HAL_StatusTypeDef write_status;
+  uint32_t addresses[5] = {
+      BOOT_FLAG_ADDRESS,
+      BOOT_FLAG_ADDRESS + OTA_CONTROL_MAGIC_OFFSET,
+      BOOT_FLAG_ADDRESS + OTA_CONTROL_SCENARIO_OFFSET,
+      BOOT_FLAG_ADDRESS + OTA_CONTROL_CONTEXT_OFFSET,
+      BOOT_FLAG_ADDRESS + OTA_CONTROL_ATTEMPT_OFFSET
+  };
+  uint32_t values[5] = {
+      boot_flag,
+      OTA_CONTROL_RECORD_MAGIC,
+      (uint32_t)fault_state.scenario,
+      reset_context,
+      fault_state.attempt_id
+  };
+  uint32_t index;
 
   write_status = Erase_Boot_Flag();
-
   if (write_status != HAL_OK)
   {
     return write_status;
@@ -803,30 +1025,33 @@ static HAL_StatusTypeDef Write_Boot_Flag(void)
       FLASH_FLAG_WRPERR
   );
 
-  write_status = HAL_FLASH_Program(
-      FLASH_TYPEPROGRAM_HALFWORD,
-      BOOT_FLAG_ADDRESS,
-      (uint16_t)(TARGET_BOOT_FLAG_MAGIC & 0xFFFFU)
-  );
+  for (index = 0U; (index < 5U) && (write_status == HAL_OK); index++)
+  {
+    write_status = Program_Flash_Word(addresses[index], values[index]);
+  }
+  HAL_FLASH_Lock();
+
+  for (index = 0U; (index < 5U) && (write_status == HAL_OK); index++)
+  {
+    if (*(volatile uint32_t *)addresses[index] != values[index])
+    {
+      write_status = HAL_ERROR;
+    }
+  }
 
   if (write_status == HAL_OK)
   {
-    write_status = HAL_FLASH_Program(
-        FLASH_TYPEPROGRAM_HALFWORD,
-        BOOT_FLAG_ADDRESS + 2U,
-        (uint16_t)(TARGET_BOOT_FLAG_MAGIC >> 16U)
-    );
+    fault_state.reset_context = reset_context;
   }
-
-  HAL_FLASH_Lock();
-
-  if ((write_status == HAL_OK) &&
-      (*(volatile uint32_t *)BOOT_FLAG_ADDRESS != TARGET_BOOT_FLAG_MAGIC))
-  {
-    write_status = HAL_ERROR;
-  }
-
   return write_status;
+}
+
+static HAL_StatusTypeDef Write_Boot_Flag(void)
+{
+  return Write_Control_Record(
+      TARGET_BOOT_FLAG_MAGIC,
+      OTA_RESET_CONTEXT_ACTIVATION
+  );
 }
 
 static void Process_Serial_Command(void)
@@ -863,6 +1088,10 @@ static void Process_Serial_Command(void)
     if (strcmp(fw_header_buffer, "STATUS_REQ") == 0)
     {
       Send_Status_Response();
+    }
+    else if (Parse_Fault_Set(fw_header_buffer) != 0U)
+    {
+      /* Parse_Fault_Set sends either FAULT_ACK or a specific error. */
     }
     else if (Parse_FW_BEGIN(fw_header_buffer) != 0U)
     {
@@ -905,6 +1134,31 @@ static void Receive_Firmware_Data(void)
   uint16_t receive_size;
   HAL_StatusTypeDef receive_status;
 
+  if ((fault_state.scenario == OTA_FAULT_TRANSFER_TIMEOUT) &&
+      (received_firmware_size >= fault_state.value))
+  {
+    Serial_Send("FW_RECEIVE_TIMEOUT\r\n");
+    firmware_receive_state = FW_STATE_WAIT_HEADER;
+    return;
+  }
+  if ((fault_state.scenario == OTA_FAULT_TRANSFER_INTERRUPTED) &&
+      (received_firmware_size >= fault_state.value))
+  {
+    Serial_Send("FW_INTERRUPTED\r\n");
+    firmware_receive_state = FW_STATE_WAIT_HEADER;
+    return;
+  }
+  if ((fault_state.scenario == OTA_FAULT_RESET_DURING_TRANSFER) &&
+      (received_firmware_size >= fault_state.value))
+  {
+    (void)Write_Control_Record(
+        ACTIVE_BOOT_FLAG_MAGIC,
+        OTA_RESET_CONTEXT_TRANSFER
+    );
+    HAL_Delay(20U);
+    HAL_NVIC_SystemReset();
+  }
+
   remaining_size = expected_firmware_size - received_firmware_size;
 
   if (remaining_size > FW_DATA_BUFFER_SIZE)
@@ -920,7 +1174,7 @@ static void Receive_Firmware_Data(void)
       &huart2,
       fw_data_buffer,
       receive_size,
-      HAL_MAX_DELAY
+      FW_RECEIVE_TIMEOUT_MS
   );
 
   if (receive_status != HAL_OK)
@@ -930,9 +1184,23 @@ static void Receive_Firmware_Data(void)
       uart_error_count++;
     }
 
-    Serial_Send("FW_RECEIVE_FAIL\r\n");
+    if (receive_status == HAL_TIMEOUT)
+    {
+      Serial_Send("FW_RECEIVE_TIMEOUT\r\n");
+    }
+    else
+    {
+      Serial_Send("FW_RECEIVE_FAIL\r\n");
+    }
     firmware_receive_state = FW_STATE_WAIT_HEADER;
     return;
+  }
+
+  if ((fault_state.scenario == OTA_FAULT_TRANSFER_CORRUPTION) &&
+      (fault_state.value >= received_firmware_size) &&
+      (fault_state.value < (received_firmware_size + receive_size)))
+  {
+    fw_data_buffer[fault_state.value - received_firmware_size] ^= 0x01U;
   }
 
   if (Write_Target_Slot_Data(
@@ -1010,6 +1278,8 @@ int main(void)
   /* USER CODE BEGIN 2 */
   uint32_t last_led_toggle = HAL_GetTick();
 
+  Initialize_Boot_Tracking();
+  Load_Control_Record();
   Telemetry_ADC_Init();
   Serial_Send(STARTUP_MESSAGE);
   /* USER CODE END 2 */

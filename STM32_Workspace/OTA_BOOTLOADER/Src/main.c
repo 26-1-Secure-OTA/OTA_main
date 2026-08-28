@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "../../Common/ota_fault_protocol.h"
 
 /* USER CODE END Includes */
 
@@ -119,6 +120,32 @@ static void Jump_To_Application(uint32_t application_address)
 static void Select_And_Jump(void)
 {
   uint32_t boot_flag = *(volatile uint32_t *)BOOT_FLAG_ADDRESS;
+  uint32_t control_magic = *(volatile uint32_t *)(
+      BOOT_FLAG_ADDRESS + OTA_CONTROL_MAGIC_OFFSET
+  );
+  uint32_t fault_scenario = *(volatile uint32_t *)(
+      BOOT_FLAG_ADDRESS + OTA_CONTROL_SCENARIO_OFFSET
+  );
+
+  /*
+   * BOOT_FAILED is a fail-safe test hook: reject only the requested target
+   * and run the known previous slot. The running application retains the
+   * control record in STATUS so the Primary can record and then clear it.
+   */
+  if ((control_magic == OTA_CONTROL_RECORD_MAGIC) &&
+      (fault_scenario == (uint32_t)OTA_FAULT_BOOT_FAILED))
+  {
+    if ((boot_flag == BOOT_FLAG_SLOT_A_MAGIC) &&
+        (Is_Application_Valid(SLOT_B_ADDRESS, SLOT_B_END_ADDRESS) != 0U))
+    {
+      Jump_To_Application(SLOT_B_ADDRESS);
+    }
+    if ((boot_flag == BOOT_FLAG_SLOT_B_MAGIC) &&
+        (Is_Application_Valid(SLOT_A_ADDRESS, SLOT_A_END_ADDRESS) != 0U))
+    {
+      Jump_To_Application(SLOT_A_ADDRESS);
+    }
+  }
 
   if ((boot_flag == BOOT_FLAG_SLOT_A_MAGIC) &&
       (Is_Application_Valid(SLOT_A_ADDRESS, SLOT_A_END_ADDRESS) != 0U))

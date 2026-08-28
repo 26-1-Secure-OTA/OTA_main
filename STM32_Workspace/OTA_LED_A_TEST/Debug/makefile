@@ -63,22 +63,22 @@ all: main-build
 main-build: OTA_LED_A_TEST.elf secondary-outputs
 
 # Tool invocations
-OTA_LED_A_TEST.elf OTA_LED_A_TEST.map: $(OBJS) $(USER_OBJS) ../STM32F103RBTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "OTA_LED_A_TEST.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"../STM32F103RBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="OTA_LED_A_TEST.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+OTA_LED_A_TEST.elf OTA_LED_A_TEST.map: $(OBJS) $(USER_OBJS) ../STM32F103RBTX_FLASH.ld makefile $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "OTA_LED_A_TEST.elf" $(OBJS) $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"../STM32F103RBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="OTA_LED_A_TEST.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
-default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+default.size.stdout: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-size  $(EXECUTABLES)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-OTA_LED_A_TEST.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+OTA_LED_A_TEST.list: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "OTA_LED_A_TEST.list"
 	@echo 'Finished building: $@'
 	@echo ' '
 
-OTA_LED_A_TEST.bin: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+OTA_LED_A_TEST.bin: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-objcopy  -O binary $(EXECUTABLES) "OTA_LED_A_TEST.bin"
 	@echo 'Finished building: $@'
 	@echo ' '

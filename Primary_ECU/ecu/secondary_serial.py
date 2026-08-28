@@ -19,6 +19,52 @@ DEFAULT_PORT = "/dev/ttyACM0"
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 UID_PATTERN = re.compile(r"^[0-9a-fA-F]{24}$")
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
+ATTEMPT_ID_PATTERN = re.compile(r"^[0-9A-Fa-f]{8}$")
+
+
+# Fault parameters are deliberately centralized on the protocol owner side.
+# Callers can override the value, but not the parameter name, which prevents a
+# typo in an experiment plan from silently selecting different firmware logic.
+FAULT_SCENARIO_DEFAULTS = {
+    "NORMAL": ("NONE", 0),
+    "LINK_DELAY_LOW": ("DELAY_MS", 50),
+    "LINK_DELAY_MEDIUM": ("DELAY_MS", 100),
+    "LINK_DELAY_HIGH_ALLOW": ("DELAY_MS", 250),
+    "VOLTAGE_LOW_ALLOW": ("VDD_MV", 3200),
+    "VOLTAGE_BLOCK": ("VDD_MV", 2500),
+    "TEMP_HIGH_ALLOW": ("TEMP_MC", 60000),
+    "TEMP_BLOCK": ("TEMP_MC", 100000),
+    "TRANSFER_TIMEOUT": ("AFTER_BYTES", 1024),
+    "TRANSFER_INTERRUPTED": ("AFTER_BYTES", 1024),
+    "TRANSFER_CORRUPTION": ("BYTE_OFFSET", 1024),
+    "RESET_DURING_TRANSFER": ("AFTER_BYTES", 1024),
+    "BOOT_FAILED": ("NONE", 0),
+    "POST_REBOOT_HEALTH_FAIL": ("NONE", 0),
+}
+
+FAULT_SCENARIO_LIMITS = {
+    "NORMAL": (0, 0),
+    "LINK_DELAY_LOW": (0, 5000),
+    "LINK_DELAY_MEDIUM": (0, 5000),
+    "LINK_DELAY_HIGH_ALLOW": (0, 5000),
+    "VOLTAGE_LOW_ALLOW": (0, 5000),
+    "VOLTAGE_BLOCK": (0, 5000),
+    "TEMP_HIGH_ALLOW": (0, 125000),
+    "TEMP_BLOCK": (0, 125000),
+    "TRANSFER_TIMEOUT": (1, 49152),
+    "TRANSFER_INTERRUPTED": (1, 49152),
+    "TRANSFER_CORRUPTION": (0, 49151),
+    "RESET_DURING_TRANSFER": (1, 49152),
+    "BOOT_FAILED": (0, 0),
+    "POST_REBOOT_HEALTH_FAIL": (0, 0),
+}
+
+VALID_RESET_CONTEXTS = {
+    "NONE",
+    "OTA_ACTIVATION",
+    "TRANSFER",
+    "BOOT_TEST",
+}
 
 
 # NUCLEO-F103RB flash layout used by this OTA demo.
@@ -30,6 +76,10 @@ SLOT_B_END = 0x0801C000
 
 class FirmwareTransferError(RuntimeError):
     """Raised when the STM32 firmware transfer protocol fails."""
+
+
+class FaultProtocolError(FirmwareTransferError):
+    """Raised when an STM32 rejects or violates the fault-control protocol."""
 
 
 class SecondarySerial:
@@ -397,6 +447,10 @@ class SecondarySerial:
         telemetry_valid_value = values.get(
             "TELEMETRY_VALID"
         )
+        scenario = values.get("SCENARIO")
+        boot_id_value = values.get("BOOT_ID")
+        reset_context = values.get("RESET_CONTEXT")
+        attempt_id = values.get("ATTEMPT_ID")
 
         if (
             uid is not None
@@ -455,6 +509,11 @@ class SecondarySerial:
                 if app_free_value is not None
                 else None
             )
+            boot_id = (
+                int(boot_id_value)
+                if boot_id_value is not None
+                else None
+            )
 
         except ValueError as exc:
             raise FirmwareTransferError(
@@ -478,6 +537,12 @@ class SecondarySerial:
             raise FirmwareTransferError(
                 "invalid UART_ERR value: "
                 f"{uart_error_count}"
+            )
+
+        if boot_id is not None and not 0 <= boot_id <= 65535:
+            raise FirmwareTransferError(
+                "invalid BOOT_ID value: "
+                f"{boot_id}"
             )
 
         if (
@@ -576,6 +641,33 @@ class SecondarySerial:
                 f"{health}"
             )
 
+        if (
+            scenario is not None
+            and scenario not in FAULT_SCENARIO_DEFAULTS
+        ):
+            raise FirmwareTransferError(
+                "invalid SCENARIO value: "
+                f"{scenario}"
+            )
+
+        if (
+            reset_context is not None
+            and reset_context not in VALID_RESET_CONTEXTS
+        ):
+            raise FirmwareTransferError(
+                "invalid RESET_CONTEXT value: "
+                f"{reset_context}"
+            )
+
+        if (
+            attempt_id is not None
+            and not ATTEMPT_ID_PATTERN.fullmatch(attempt_id)
+        ):
+            raise FirmwareTransferError(
+                "invalid ATTEMPT_ID value: "
+                f"{attempt_id}"
+            )
+
         return {
             "ecu_serial": parts[1],
             "active_slot": active_slot,
@@ -615,6 +707,14 @@ class SecondarySerial:
             "telemetry_valid": (
                 telemetry_valid_value == "1"
                 if telemetry_valid_value is not None
+                else None
+            ),
+            "scenario": scenario,
+            "boot_id": boot_id,
+            "reset_context": reset_context,
+            "attempt_id": (
+                attempt_id.upper()
+                if attempt_id is not None
                 else None
             ),
         }
@@ -675,6 +775,103 @@ class SecondarySerial:
 
         return status
 
+    def set_fault(
+        self,
+        scenario: str,
+        *,
+        value: Optional[int] = None,
+        attempt_id: Optional[str] = None,
+        timeout_seconds: float = 5.0,
+    ) -> dict:
+        """Select one deterministic, test-only STM32 fault scenario.
+
+        The wire command remains compatible with the documented four-field
+        protocol. An optional eight-hex-digit attempt ID is appended for
+        reset/boot correlation and is echoed later in STATUS.
+        """
+
+        if not isinstance(scenario, str):
+            raise FaultProtocolError("scenario must be a string")
+
+        scenario = scenario.strip().upper()
+        if scenario not in FAULT_SCENARIO_DEFAULTS:
+            raise FaultProtocolError(
+                "unsupported fault scenario: "
+                f"{scenario or '<empty>'}"
+            )
+
+        parameter, default_value = FAULT_SCENARIO_DEFAULTS[scenario]
+        if value is None:
+            value = default_value
+
+        minimum_value, maximum_value = FAULT_SCENARIO_LIMITS[scenario]
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not minimum_value <= value <= maximum_value
+        ):
+            raise FaultProtocolError(
+                f"{scenario} value must be an integer between "
+                f"{minimum_value} and {maximum_value}"
+            )
+
+        if attempt_id is not None:
+            if not isinstance(attempt_id, str):
+                raise FaultProtocolError("attempt_id must be a string")
+            attempt_id = attempt_id.strip().upper()
+            if not ATTEMPT_ID_PATTERN.fullmatch(attempt_id):
+                raise FaultProtocolError(
+                    "attempt_id must be exactly 8 hexadecimal characters"
+                )
+
+        command = f"FAULT_SET,{scenario},{parameter},{value}"
+        if attempt_id is not None:
+            command += f",{attempt_id}"
+        command += "\n"
+        command_bytes = command.encode("ascii")
+
+        self.ser.reset_input_buffer()
+        print(f"[Primary -> STM32] {command.strip()}")
+        written = self.ser.write(command_bytes)
+        if written != len(command_bytes):
+            raise FaultProtocolError(
+                "FAULT_SET write incomplete: "
+                f"expected={len(command_bytes)}, written={written}"
+            )
+        self.ser.flush()
+
+        response = self._wait_for_line_prefix(
+            "FAULT_",
+            timeout_seconds,
+        )
+        expected_response = f"FAULT_ACK,{scenario}"
+        if response != expected_response:
+            raise FaultProtocolError(
+                "STM32 rejected FAULT_SET: "
+                f"{response or 'FAULT_ACK timeout'}"
+            )
+
+        return {
+            "ok": True,
+            "scenario": scenario,
+            "parameter": parameter,
+            "value": value,
+            "attempt_id": attempt_id,
+            "response": response,
+        }
+
+    def clear_fault(
+        self,
+        *,
+        timeout_seconds: float = 5.0,
+    ) -> dict:
+        """Return the board to NORMAL without changing the OTA API."""
+
+        return self.set_fault(
+            "NORMAL",
+            timeout_seconds=timeout_seconds,
+        )
+
     def get_status_samples(
         self,
         sample_count: int = 5,
@@ -722,6 +919,9 @@ class SecondarySerial:
             "active_slot",
             "target_slot",
             "max_size",
+            "boot_id",
+            "scenario",
+            "attempt_id",
         )
         first = samples[0]
 

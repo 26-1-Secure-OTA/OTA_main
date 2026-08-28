@@ -60,17 +60,17 @@ all: main-build
 main-build: OTA_BOOTLOADER.elf secondary-outputs
 
 # Tool invocations
-OTA_BOOTLOADER.elf OTA_BOOTLOADER.map: $(OBJS) $(USER_OBJS) C:\Users\minjungi\Documents\Secure\ OTA\STM32_Workspace\OTA_BOOTLOADER\STM32F103RBTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "OTA_BOOTLOADER.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"C:\Users\minjungi\Documents\Secure OTA\STM32_Workspace\OTA_BOOTLOADER\STM32F103RBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="OTA_BOOTLOADER.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+OTA_BOOTLOADER.elf OTA_BOOTLOADER.map: $(OBJS) $(USER_OBJS) ../STM32F103RBTX_FLASH.ld makefile $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "OTA_BOOTLOADER.elf" $(OBJS) $(USER_OBJS) $(LIBS) -mcpu=cortex-m3 -T"../STM32F103RBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="OTA_BOOTLOADER.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
-default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+default.size.stdout: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-size  $(EXECUTABLES)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-OTA_BOOTLOADER.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+OTA_BOOTLOADER.list: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "OTA_BOOTLOADER.list"
 	@echo 'Finished building: $@'
 	@echo ' '
