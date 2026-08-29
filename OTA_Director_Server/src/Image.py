@@ -276,7 +276,7 @@ if __name__ == "__main__":
     # ).start()
     print("[Main] new_chunks watcher started")
 
-    MQTT_BROKER = "10.101.161.146"
+    MQTT_BROKER = "172.20.10.7"
     MQTT_PORT = 8883
     IMAGE_REPOSITORY_URL = os.environ.get(
         "IMAGE_REPOSITORY_URL",
