@@ -171,6 +171,28 @@ Prime ECU 실행과 동시에 다운로드가 진행되며, Prime ECU에서 전�
 
 ## STM32 A/B 슬롯 펌웨어 배포
 
+### AI 기반 업데이트 순서 설정
+
+Safety Policy에서 `ALLOW`된 ECU의 업데이트 순서는 기본적으로 기존
+Median/MAD 통계 방식이 결정합니다. 학습된 Isolation Forest를 실제 실행
+경로에 연결하되 순서에는 아직 반영하지 않으려면 다음처럼 SHADOW 모드로
+실행합니다.
+
+```bash
+cd Primary_ECU
+export OTA_AI_MODE=ISOLATION_FOREST
+export OTA_AI_APPLY_MODE=SHADOW
+python3 Primary.py
+```
+
+검증 후 추천 순서를 실제 업데이트 순서에 적용하려면
+`OTA_AI_APPLY_MODE=ACTIVE`를 사용합니다. 모델 파일은 기본적으로
+`Primary_ECU/models/isolation-forest-v1.joblib`, 메타데이터는
+`Primary_ECU/models/isolation-forest-v1.metadata.json`에서 읽습니다.
+다른 artifact를 사용할 때는 각각 `OTA_AI_MODEL_PATH`와
+`OTA_AI_METADATA_PATH`로 지정할 수 있습니다. 모델 로딩 또는 추론에
+실패하면 통계 방식으로, 통계 방식도 실패하면 고정 순서로 fallback합니다.
+
 STM32 펌웨어를 배포할 때는 동일한 소스와 동일한 버전으로 빌드한
 A/B 바이너리 두 개가 모두 필요합니다. 두 바이너리는 링커 시작 주소와
 벡터 테이블 위치만 다릅니다.

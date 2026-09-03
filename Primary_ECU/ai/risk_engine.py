@@ -35,8 +35,9 @@ class RiskResult:
 def parse_modes(model_mode: str, apply_mode: str | None = None) -> tuple[str, str]:
     """Map legacy OFF/SHADOW/ACTIVE values without breaking callers."""
     requested = str(model_mode).upper()
-    if apply_mode is None and requested in {"SHADOW", "ACTIVE"}:
-        return "STATISTICAL", requested
+    if requested in {"SHADOW", "ACTIVE"}:
+        applied = requested if apply_mode is None else str(apply_mode).upper()
+        return "STATISTICAL", applied
     if requested == "OFF":
         return "OFF", "ACTIVE" if apply_mode is None else str(apply_mode).upper()
     return requested, "ACTIVE" if apply_mode is None else str(apply_mode).upper()
@@ -140,4 +141,3 @@ class RiskEngine:
         expected = set(fixed)
         if set(result.recommended_order) != expected or set(result.scores) != expected:
             raise ValueError("OUTPUT_ECU_SET_MISMATCH")
-

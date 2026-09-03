@@ -117,7 +117,10 @@ def schedule_allow_ecus(
     *,
     allow_context: dict[str, dict],
     profile_path: str | Path,
+    model_path: str | Path | None = None,
+    metadata_path: str | Path | None = None,
     requested_mode: str = "ACTIVE",
+    apply_mode: str | None = None,
     fixed_order=FIXED_ORDER,
 ) -> dict:
     # Compatibility wrapper: legacy callers keep OFF/SHADOW/ACTIVE while the
@@ -127,8 +130,17 @@ def schedule_allow_ecus(
     requested_mode = str(requested_mode).upper()
     result = RiskEngine(
         profile_path=profile_path,
+        model_path=model_path,
+        metadata_path=metadata_path,
         fixed_order=fixed_order,
-    ).rank(allow_context, model_mode=requested_mode).to_dict()
-    if result["used_mode"] == "STATISTICAL":
+    ).rank(
+        allow_context,
+        model_mode=requested_mode,
+        apply_mode=apply_mode,
+    ).to_dict()
+    if (
+        requested_mode in {"ACTIVE", "SHADOW"}
+        and result["used_mode"] == "STATISTICAL"
+    ):
         result["used_mode"] = requested_mode
     return result

@@ -11,6 +11,9 @@ from ecu.secondary_serial import SecondarySerial
 
 
 class AiSchedulerTests(unittest.TestCase):
+    root = Path(__file__).resolve().parents[1]
+    isolation_model = root / "models" / "isolation-forest-v1.joblib"
+    isolation_metadata = root / "models" / "isolation-forest-v1.metadata.json"
     registry = {
         "stm32-led-001": {"uid": "00112233445566778899AABB"},
         "stm32-led-002": {"uid": "112233445566778899AABBCC"},
@@ -119,6 +122,39 @@ class AiSchedulerTests(unittest.TestCase):
             result["execution_order"],
             ["stm32-led-001", "stm32-led-002", "stm32-led-003"],
         )
+
+    def test_isolation_forest_is_connected_and_can_run_in_shadow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, profile = self.make_profile(directory)
+            result = schedule_allow_ecus(
+                allow_context=self.context(),
+                profile_path=profile,
+                model_path=self.isolation_model,
+                metadata_path=self.isolation_metadata,
+                requested_mode="ISOLATION_FOREST",
+                apply_mode="SHADOW",
+            )
+
+        self.assertEqual(result["used_mode"], "ISOLATION_FOREST")
+        self.assertEqual(result["apply_mode"], "SHADOW")
+        self.assertEqual(result["model_version"], "isolation-forest-v1")
+        self.assertEqual(result["execution_order"], list(self.registry))
+        self.assertEqual(set(result["scores"]), set(self.registry))
+
+    def test_isolation_forest_fallback_is_reported_as_statistical(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, profile = self.make_profile(directory)
+            result = schedule_allow_ecus(
+                allow_context=self.context(),
+                profile_path=profile,
+                model_path=Path(directory) / "missing.joblib",
+                metadata_path=Path(directory) / "missing.json",
+                requested_mode="ISOLATION_FOREST",
+                apply_mode="SHADOW",
+            )
+
+        self.assertEqual(result["used_mode"], "STATISTICAL")
+        self.assertEqual(result["fallback_reason"], "MODEL_NOT_FOUND")
 
     def test_missing_profile_falls_back_to_fixed_order(self):
         result = schedule_allow_ecus(

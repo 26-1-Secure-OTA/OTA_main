@@ -1750,6 +1750,7 @@ class Installer:
         expected_secondary_status: Optional[dict] = None,
         expected_uid: Optional[str] = None,
         policy_artifact_info: Optional[dict] = None,
+        force_reinstall: bool = False,
     ) -> dict:
         """Install the matching .bin on the currently connected Secondary.
 
@@ -1813,6 +1814,7 @@ class Installer:
                     status=before_status,
                     artifact_info=policy_artifact_info,
                     expected_uid=expected_uid,
+                    force_reinstall=force_reinstall,
                 )
 
                 if policy_recheck["decision"] != "ALLOW":
@@ -2286,6 +2288,20 @@ class Installer:
             "OTA_SCENARIO_ID",
             "UNSPECIFIED",
         )
+        experiment_campaign_id = os.environ.get("OTA_CAMPAIGN_ID", "").strip()
+        experiment_attempt_id = os.environ.get("OTA_ATTEMPT_ID", "").strip().upper()
+        force_reinstall = (
+            os.environ.get("OTA_EXPERIMENT_FORCE_REINSTALL", "0") == "1"
+        )
+        if force_reinstall and (
+            scenario_id == "UNSPECIFIED"
+            or not experiment_campaign_id
+            or re.fullmatch(r"[0-9A-F]{8}", experiment_attempt_id) is None
+        ):
+            raise ValueError(
+                "OTA_EXPERIMENT_FORCE_REINSTALL requires scenario, campaign, "
+                "and an eight-digit hexadecimal attempt ID"
+            )
         data_source = os.environ.get(
             "OTA_DATA_SOURCE",
             "BOARD",
@@ -2326,13 +2342,8 @@ class Installer:
             power_percent = None
             temperature_c = None
 
-        campaign_id = (
-            datetime.now(
-                timezone.utc
-            )
-            .strftime(
-                "campaign-%Y%m%dT%H%M%SZ"
-            )
+        campaign_id = experiment_campaign_id or (
+            datetime.now(timezone.utc).strftime("campaign-%Y%m%dT%H%M%SZ")
         )
 
         fixed_order = list(FIXED_ORDER)
@@ -2359,10 +2370,13 @@ class Installer:
         schedule_result = {
             "requested_mode": "OFF",
             "used_mode": "OFF",
+            "apply_mode": "ACTIVE",
             "fallback_reason": None,
             "recommended_order": [],
             "execution_order": [],
             "scores": {},
+            "model_version": None,
+            "model_hash": None,
             "profile_version": None,
             "profile_hash": None,
         }
@@ -2382,7 +2396,10 @@ class Installer:
             score = schedule_result["scores"].get(expected_ecu, {})
 
             return {
-                "attempt_id": f"{campaign_id}:{expected_ecu}",
+                "attempt_id": (
+                    experiment_attempt_id
+                    or f"{campaign_id}:{expected_ecu}"
+                ),
                 "scenario_id": scenario_id,
                 "campaign_id": campaign_id,
                 "secondary_id": expected_ecu,
@@ -2418,14 +2435,18 @@ class Installer:
                 "health": observed_status.get("health"),
                 "ai_mode_requested": schedule_result["requested_mode"],
                 "ai_mode_used": schedule_result["used_mode"],
+                "ai_apply_mode": schedule_result["apply_mode"],
                 "ai_fallback_reason": schedule_result["fallback_reason"],
                 "ai_risk_score": score.get("risk_score"),
+                "ai_anomaly_score": score.get("anomaly_score"),
                 "ai_feature_deviations": score.get("deviations"),
                 "ai_feature_contributions": score.get("contributions"),
                 "ai_recommended_rank": recommended_rank.get(expected_ecu),
                 "ai_execution_rank": execution_rank.get(expected_ecu),
                 "ai_profile_version": schedule_result["profile_version"],
                 "ai_profile_hash": schedule_result["profile_hash"],
+                "ai_model_version": schedule_result["model_version"],
+                "ai_model_hash": schedule_result["model_hash"],
             }
 
         # Complete Safety Policy and feature collection for every target before
@@ -2514,6 +2535,7 @@ class Installer:
                         "uid"
                     )
                 ),
+                force_reinstall=force_reinstall,
             )
 
             try:
@@ -2551,14 +2573,27 @@ class Installer:
                 }
 
         ai_mode = os.environ.get("OTA_AI_MODE", "ACTIVE").upper()
+        ai_apply_mode = os.environ.get("OTA_AI_APPLY_MODE")
+        primary_ecu_dir = Path(__file__).resolve().parents[1]
         profile_path = os.environ.get(
             "OTA_NORMAL_PROFILE",
-            "./models/normal-profile-v1.json",
+            str(primary_ecu_dir / "models" / "normal-profile-v1.json"),
+        )
+        model_path = os.environ.get(
+            "OTA_AI_MODEL_PATH",
+            str(primary_ecu_dir / "models" / "isolation-forest-v1.joblib"),
+        )
+        metadata_path = os.environ.get(
+            "OTA_AI_METADATA_PATH",
+            str(primary_ecu_dir / "models" / "isolation-forest-v1.metadata.json"),
         )
         schedule_result = schedule_allow_ecus(
             allow_context=allow_context,
             profile_path=profile_path,
+            model_path=model_path,
+            metadata_path=metadata_path,
             requested_mode=ai_mode,
+            apply_mode=ai_apply_mode,
             fixed_order=fixed_order,
         )
         recommended_rank = {
@@ -2592,6 +2627,7 @@ class Installer:
             "[AI Scheduler] "
             f"requested={schedule_result['requested_mode']}, "
             f"used={schedule_result['used_mode']}, "
+            f"apply={schedule_result['apply_mode']}, "
             f"recommended={schedule_result['recommended_order']}, "
             f"execution={schedule_result['execution_order']}, "
             f"fallback={schedule_result['fallback_reason']}"
@@ -2770,6 +2806,7 @@ class Installer:
                     policy_artifact_info=(
                         artifact_info
                     ),
+                    force_reinstall=force_reinstall,
                 )
             )
 

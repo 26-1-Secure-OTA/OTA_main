@@ -38,8 +38,13 @@ For hardware runs, provide the normal OTA entrypoint as a command:
 
 ```bash
 python3 experiments/scenario_runner.py \
-  --ota-command "python3 your_ota_entrypoint.py"
+  --ota-command "python3 experiments/ota_once.py"
 ```
+
+`ota_once.py` selects the inactive-slot image matching the board's currently
+running version from `STM32_Workspace/firmware`. Same-version reinstall is
+enabled only when the runner supplies a scenario, campaign ID, and valid
+eight-digit attempt ID.
 
 The command receives `OTA_SCENARIO_ID`, `OTA_CAMPAIGN_ID`, `OTA_ATTEMPT_ID`,
 and `OTA_SECONDARY_ID`. Its final non-empty stdout line must be a JSON object
