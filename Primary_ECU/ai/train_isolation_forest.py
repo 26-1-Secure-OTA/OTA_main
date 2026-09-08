@@ -1,4 +1,4 @@
-"""Train the reproducible v1 Isolation Forest on aggregated normal rows."""
+"""Train the reproducible two-feature Isolation Forest for hybrid OTA risk."""
 
 from __future__ import annotations
 
@@ -16,14 +16,15 @@ from sklearn.preprocessing import RobustScaler
 
 from .dataset_loader import load_jsonl
 from .feature_schema import DEFAULT_SCHEMA
+from .hybrid_risk import build_hybrid_config
 from .model_loader import sha256_file
 
 
 PRIMARY_ECU_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = PRIMARY_ECU_DIR / "data" / "ai_baseline" / "run30" / "normal_status_aggregated.jsonl"
-DEFAULT_MODEL = PRIMARY_ECU_DIR / "models" / "isolation-forest-v1.joblib"
-DEFAULT_METADATA = PRIMARY_ECU_DIR / "models" / "isolation-forest-v1.metadata.json"
-MODEL_VERSION = "isolation-forest-v1"
+DEFAULT_INPUT = PRIMARY_ECU_DIR / "data" / "ai_baseline" / "run_20260903_session1" / "normal_status_aggregated.jsonl"
+DEFAULT_MODEL = PRIMARY_ECU_DIR / "models" / "isolation-forest-v2.joblib"
+DEFAULT_METADATA = PRIMARY_ECU_DIR / "models" / "isolation-forest-v2.metadata.json"
+MODEL_VERSION = "isolation-forest-v2"
 RANDOM_STATE = 42
 
 
@@ -62,6 +63,14 @@ def train(dataset_path=DEFAULT_INPUT):
             "quantile_probabilities": np.linspace(0.0, 1.0, 101).tolist(),
             "anomaly_score_quantiles": quantiles,
         },
+        "hybrid_risk": build_hybrid_config(dataset.rows),
+        "adaptive_training": {
+            "enabled": True,
+            "eligible_rows_seen": 0,
+            "retrain_batch_rows": 30,
+            "rows_per_board": 100,
+            "status": "BOOTSTRAP_MODEL",
+        },
     }
     return pipeline, metadata
 
@@ -92,4 +101,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

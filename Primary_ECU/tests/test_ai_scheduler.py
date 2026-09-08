@@ -12,8 +12,8 @@ from ecu.secondary_serial import SecondarySerial
 
 class AiSchedulerTests(unittest.TestCase):
     root = Path(__file__).resolve().parents[1]
-    isolation_model = root / "models" / "isolation-forest-v1.joblib"
-    isolation_metadata = root / "models" / "isolation-forest-v1.metadata.json"
+    isolation_model = root / "models" / "isolation-forest-v2.joblib"
+    isolation_metadata = root / "models" / "isolation-forest-v2.metadata.json"
     registry = {
         "stm32-led-001": {"uid": "00112233445566778899AABB"},
         "stm32-led-002": {"uid": "112233445566778899AABBCC"},
@@ -54,6 +54,7 @@ class AiSchedulerTests(unittest.TestCase):
                     "supply_voltage_mv": 3300,
                     "temperature_c": 39.1,
                     "app_flash_free_ratio": 0.76,
+                    "image_size_ratio": 0.55,
                     "previous_failures": 0,
                     "recent_reset_count": 0,
                 },
@@ -97,10 +98,11 @@ class AiSchedulerTests(unittest.TestCase):
                     "stm32-led-003": 26.0,
                 }),
                 profile_path=path,
-                requested_mode="ACTIVE",
+                requested_mode="STATISTICAL",
+                apply_mode="ACTIVE",
             )
 
-        self.assertEqual(result["used_mode"], "ACTIVE")
+        self.assertEqual(result["used_mode"], "STATISTICAL")
         self.assertEqual(
             result["execution_order"],
             ["stm32-led-002", "stm32-led-003", "stm32-led-001"],
@@ -112,7 +114,8 @@ class AiSchedulerTests(unittest.TestCase):
             result = schedule_allow_ecus(
                 allow_context=self.context({"stm32-led-001": 100.0}),
                 profile_path=path,
-                requested_mode="SHADOW",
+                requested_mode="STATISTICAL",
+                apply_mode="SHADOW",
             )
 
         self.assertNotEqual(
@@ -137,11 +140,11 @@ class AiSchedulerTests(unittest.TestCase):
 
         self.assertEqual(result["used_mode"], "ISOLATION_FOREST")
         self.assertEqual(result["apply_mode"], "SHADOW")
-        self.assertEqual(result["model_version"], "isolation-forest-v1")
+        self.assertEqual(result["model_version"], "isolation-forest-v2")
         self.assertEqual(result["execution_order"], list(self.registry))
         self.assertEqual(set(result["scores"]), set(self.registry))
 
-    def test_isolation_forest_fallback_is_reported_as_statistical(self):
+    def test_isolation_forest_failure_uses_fixed_order(self):
         with tempfile.TemporaryDirectory() as directory:
             _, profile = self.make_profile(directory)
             result = schedule_allow_ecus(
@@ -153,14 +156,14 @@ class AiSchedulerTests(unittest.TestCase):
                 apply_mode="SHADOW",
             )
 
-        self.assertEqual(result["used_mode"], "STATISTICAL")
+        self.assertEqual(result["used_mode"], "OFF")
         self.assertEqual(result["fallback_reason"], "MODEL_NOT_FOUND")
 
     def test_missing_profile_falls_back_to_fixed_order(self):
         result = schedule_allow_ecus(
             allow_context=self.context(),
             profile_path="/definitely/missing/profile.json",
-            requested_mode="ACTIVE",
+            requested_mode="STATISTICAL",
         )
         self.assertEqual(result["used_mode"], "OFF")
         self.assertEqual(result["fallback_reason"], "PROFILE_NOT_FOUND")
@@ -177,7 +180,8 @@ class AiSchedulerTests(unittest.TestCase):
             result = schedule_allow_ecus(
                 allow_context=allow_context,
                 profile_path=path,
-                requested_mode="ACTIVE",
+                requested_mode="STATISTICAL",
+                apply_mode="ACTIVE",
             )
 
         self.assertNotIn("stm32-led-002", result["execution_order"])

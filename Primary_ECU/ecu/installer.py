@@ -2404,7 +2404,7 @@ class Installer:
                 "campaign_id": campaign_id,
                 "secondary_id": expected_ecu,
                 "data_source": data_source,
-                "feature_schema_version": 2,
+                "feature_schema_version": 3,
                 "features": dict(features),
                 "current_version": observed_status.get("version"),
                 "target_version": artifact.get("target_version"),
@@ -2433,12 +2433,18 @@ class Installer:
                     "uart_error_count"
                 ),
                 "health": observed_status.get("health"),
+                "board_scenario": observed_status.get("scenario"),
+                "board_attempt_id": observed_status.get("attempt_id"),
                 "ai_mode_requested": schedule_result["requested_mode"],
                 "ai_mode_used": schedule_result["used_mode"],
                 "ai_apply_mode": schedule_result["apply_mode"],
                 "ai_fallback_reason": schedule_result["fallback_reason"],
                 "ai_risk_score": score.get("risk_score"),
                 "ai_anomaly_score": score.get("anomaly_score"),
+                "ai_physical_anomaly_risk": score.get("physical_anomaly_risk"),
+                "ai_directional_risk": score.get("directional_risk"),
+                "ai_risk_components": score.get("component_scores"),
+                "ai_selected_features": score.get("selected_features"),
                 "ai_feature_deviations": score.get("deviations"),
                 "ai_feature_contributions": score.get("contributions"),
                 "ai_recommended_rank": recommended_rank.get(expected_ecu),
@@ -2572,7 +2578,7 @@ class Installer:
                     "features": features,
                 }
 
-        ai_mode = os.environ.get("OTA_AI_MODE", "ACTIVE").upper()
+        ai_mode = os.environ.get("OTA_AI_MODE", "ISOLATION_FOREST").upper()
         ai_apply_mode = os.environ.get("OTA_AI_APPLY_MODE")
         primary_ecu_dir = Path(__file__).resolve().parents[1]
         profile_path = os.environ.get(
@@ -2581,11 +2587,11 @@ class Installer:
         )
         model_path = os.environ.get(
             "OTA_AI_MODEL_PATH",
-            str(primary_ecu_dir / "models" / "isolation-forest-v1.joblib"),
+            str(primary_ecu_dir / "models" / "isolation-forest-v2.joblib"),
         )
         metadata_path = os.environ.get(
             "OTA_AI_METADATA_PATH",
-            str(primary_ecu_dir / "models" / "isolation-forest-v1.metadata.json"),
+            str(primary_ecu_dir / "models" / "isolation-forest-v2.metadata.json"),
         )
         schedule_result = schedule_allow_ecus(
             allow_context=allow_context,
@@ -2916,6 +2922,40 @@ class Installer:
             })
             logger.append(log_row)
 
+        adaptive_model_result = {"status": "DISABLED"}
+        if os.environ.get("OTA_AI_AUTO_RETRAIN", "1") == "1":
+            try:
+                from ai.adaptive_model import maybe_retrain
+
+                bootstrap_path = os.environ.get(
+                    "OTA_AI_BASELINE_DATASET",
+                    str(
+                        primary_ecu_dir
+                        / "data"
+                        / "ai_baseline"
+                        / "run_20260903_session1"
+                        / "normal_status_aggregated.jsonl"
+                    ),
+                )
+                adaptive_model_result = maybe_retrain(
+                    experiment_log_path=logger.log_path,
+                    bootstrap_dataset_path=bootstrap_path,
+                    model_path=model_path,
+                    metadata_path=metadata_path,
+                    retrain_batch_rows=int(
+                        os.environ.get("OTA_AI_RETRAIN_BATCH_ROWS", "30")
+                    ),
+                    rows_per_board=int(
+                        os.environ.get("OTA_AI_ROLLING_ROWS_PER_BOARD", "100")
+                    ),
+                )
+            except Exception as exc:
+                adaptive_model_result = {
+                    "status": "RETRAIN_FAILED",
+                    "reason": str(exc),
+                }
+            print(f"[AI Adaptive Training] {adaptive_model_result}")
+
         attempted_results = [
             result
             for result in results
@@ -2945,6 +2985,7 @@ class Installer:
                 )
             ),
             "results": results,
+            "adaptive_model": adaptive_model_result,
         }
 
     def download_config_to_secondary(

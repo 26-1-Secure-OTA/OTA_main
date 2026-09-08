@@ -20,6 +20,7 @@ Thumbs.db
 *.log
 *.out
 *.tmp
+*.lock
 
 
 # OTA Artifacts 
@@ -57,6 +58,8 @@ fs_root/
 
 # Runtime Generated Data
 Primary_ECU/downloads/
+Primary_ECU/models/adaptive-training-*.jsonl
+Primary_ECU/models/*.previous.*
 
 
 *:Zone.Identifier

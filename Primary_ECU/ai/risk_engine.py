@@ -37,7 +37,7 @@ def parse_modes(model_mode: str, apply_mode: str | None = None) -> tuple[str, st
     requested = str(model_mode).upper()
     if requested in {"SHADOW", "ACTIVE"}:
         applied = requested if apply_mode is None else str(apply_mode).upper()
-        return "STATISTICAL", applied
+        return "ISOLATION_FOREST", applied
     if requested == "OFF":
         return "OFF", "ACTIVE" if apply_mode is None else str(apply_mode).upper()
     return requested, "ACTIVE" if apply_mode is None else str(apply_mode).upper()
@@ -91,7 +91,7 @@ class RiskEngine:
             return base
 
         attempts = [model_mode]
-        if model_mode in {"ISOLATION_FOREST", "SUPERVISED"}:
+        if model_mode == "SUPERVISED":
             attempts.append("STATISTICAL")
 
         for attempt in attempts:

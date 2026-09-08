@@ -28,7 +28,21 @@ SCHEMA_FEATURES = {
         "previous_failures",
         "recent_reset_count",
     ),
+    # Hybrid OTA scheduler v3: Isolation Forest learns only the physical
+    # measurements for which deviations in either direction are meaningful.
+    3: (
+        "supply_voltage_mv",
+        "temperature_c",
+    ),
 }
+
+SELECTED_RISK_FEATURES = (
+    "link_response_ms",
+    "supply_voltage_mv",
+    "temperature_c",
+    "image_size_ratio",
+    "previous_failures",
+)
 
 
 @dataclass(frozen=True)
@@ -67,5 +81,4 @@ class FeatureSchema:
         return vector
 
 
-DEFAULT_SCHEMA = FeatureSchema(1)
-
+DEFAULT_SCHEMA = FeatureSchema(3)

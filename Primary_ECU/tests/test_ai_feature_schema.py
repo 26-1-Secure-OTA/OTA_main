@@ -41,7 +41,12 @@ class FeatureSchemaTests(unittest.TestCase):
         self.assertIn("app_flash_free_ratio", FeatureSchema(1).feature_order)
         self.assertIn("image_size_ratio", FeatureSchema(2).feature_order)
 
+    def test_v3_is_physical_isolation_forest_schema(self):
+        self.assertEqual(
+            FeatureSchema(3).feature_order,
+            ("supply_voltage_mv", "temperature_c"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

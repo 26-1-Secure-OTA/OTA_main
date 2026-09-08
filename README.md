@@ -173,10 +173,32 @@ Prime ECU 실행과 동시에 다운로드가 진행되며, Prime ECU에서 전�
 
 ### AI 기반 업데이트 순서 설정
 
-Safety Policy에서 `ALLOW`된 ECU의 업데이트 순서는 기본적으로 기존
-Median/MAD 통계 방식이 결정합니다. 학습된 Isolation Forest를 실제 실행
-경로에 연결하되 순서에는 아직 반영하지 않으려면 다음처럼 SHADOW 모드로
-실행합니다.
+Safety Policy에서 `ALLOW`된 ECU의 업데이트 순서는 기본적으로 하이브리드
+Isolation Forest 방식이 결정합니다. Isolation Forest는 공급전압과 MCU 내부
+온도의 정상 분포 이탈을 계산하고, 응답 지연·이미지 슬롯 점유율·과거 실패
+횟수의 방향성 위험도를 가중 합산합니다. 이 다섯 값 이외의 수집 항목은
+Safety Policy와 감사 로그에는 남지만 AI 업데이트 순서에는 사용하지 않습니다.
+
+기본 가중치는 물리 이상도 40%, 응답 지연 30%, 이미지 점유율 15%, 과거 실패
+15%입니다. 응답 지연은 정상 학습 데이터의 중앙값 이하에서는 위험을 추가하지
+않고, 중앙값부터 Safety Policy 제한인 1000ms 사이에서 0~1로 증가합니다.
+
+각 캠페인은 시작 시점의 모델과 현재 측정값으로 순서를 결정합니다. 캠페인 종료
+후 실제 보드·정상 시나리오·정책 ALLOW·업데이트 성공·정상 텔레메트리를 모두
+만족한 데이터가 신규 30건 쌓이면 최근 보드별 100건의 rolling window로 모델을
+자동 재학습합니다. 새 모델과 새 정상 응답시간 중앙값은 다음 캠페인부터 적용됩니다.
+fault injection, simulator, 실패 행, 물리 이상도 0.95 초과 행은 정상 학습에서
+제외됩니다. 자동 재학습을 끄려면 `OTA_AI_AUTO_RETRAIN=0`을 사용합니다.
+
+기본 실행은 `ISOLATION_FOREST` + `ACTIVE`입니다. 순서에 반영하지 않고 추천
+결과만 확인하려면 다음처럼 SHADOW 모드로 실행합니다.
+
+최초 한 번은 모델과 동일한 AI 의존성을 설치합니다.
+
+```bash
+cd Primary_ECU
+python3 -m pip install --user -r requirements-ai.txt
+```
 
 ```bash
 cd Primary_ECU
@@ -187,11 +209,13 @@ python3 Primary.py
 
 검증 후 추천 순서를 실제 업데이트 순서에 적용하려면
 `OTA_AI_APPLY_MODE=ACTIVE`를 사용합니다. 모델 파일은 기본적으로
-`Primary_ECU/models/isolation-forest-v1.joblib`, 메타데이터는
-`Primary_ECU/models/isolation-forest-v1.metadata.json`에서 읽습니다.
+`Primary_ECU/models/isolation-forest-v2.joblib`, 메타데이터는
+`Primary_ECU/models/isolation-forest-v2.metadata.json`에서 읽습니다.
 다른 artifact를 사용할 때는 각각 `OTA_AI_MODEL_PATH`와
 `OTA_AI_METADATA_PATH`로 지정할 수 있습니다. 모델 로딩 또는 추론에
-실패하면 통계 방식으로, 통계 방식도 실패하면 고정 순서로 fallback합니다.
+실패하면 선정하지 않은 Feature를 사용하는 구형 통계 방식으로 넘어가지 않고
+`001 → 002 → 003` 고정 순서로 fallback합니다. 구형 Median/MAD 방식은
+`OTA_AI_MODE=STATISTICAL`로 명시한 경우에만 실행됩니다.
 
 STM32 펌웨어를 배포할 때는 동일한 소스와 동일한 버전으로 빌드한
 A/B 바이너리 두 개가 모두 필요합니다. 두 바이너리는 링커 시작 주소와

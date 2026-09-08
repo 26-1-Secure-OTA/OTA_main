@@ -6,6 +6,7 @@ import math
 import numpy as np
 
 from .feature_schema import DEFAULT_SCHEMA
+from .hybrid_risk import combine_hybrid_risk
 from .model_loader import load_model
 from .risk_engine import RiskResult
 
@@ -40,14 +41,24 @@ class IsolationForestEngine:
         risks = np.interp(anomaly_scores, quantiles, probabilities, left=0.0, right=1.0)
         if not np.all(np.isfinite(risks)):
             raise ValueError("PREDICTION_NONFINITE")
-        scores = {
-            ecu: {
-                "risk_score": round(float(risk), 6),
+        hybrid_config = metadata.get("hybrid_risk")
+        if not isinstance(hybrid_config, dict):
+            raise ValueError("HYBRID_CONFIG_MISSING")
+        scores = {}
+        for ecu, physical_risk, anomaly in zip(fixed, risks, anomaly_scores):
+            combined = combine_hybrid_risk(
+                physical_anomaly_risk=float(physical_risk),
+                features=allow_context[ecu].get("features") or {},
+                config=hybrid_config,
+            )
+            scores[ecu] = {
+                **combined,
                 "anomaly_score": round(float(anomaly), 9),
-                "score_semantics": "anomaly_based_risk_not_failure_probability",
+                "score_semantics": hybrid_config.get(
+                    "score_semantics",
+                    "relative_scheduling_risk_not_failure_probability",
+                ),
             }
-            for ecu, risk, anomaly in zip(fixed, risks, anomaly_scores)
-        }
         tie_break = {ecu: i for i, ecu in enumerate(fixed)}
         recommended = sorted(fixed, key=lambda ecu: (scores[ecu]["risk_score"], tie_break[ecu]))
         return RiskResult(
@@ -60,4 +71,3 @@ class IsolationForestEngine:
             model_version=metadata["model_version"],
             model_hash=metadata["model_sha256"],
         )
-

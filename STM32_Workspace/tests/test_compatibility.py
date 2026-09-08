@@ -20,7 +20,7 @@ DIRECTOR_FIRMWARE_ROOT = (
 
 class Stm32CompatibilityTests(unittest.TestCase):
     def test_all_ecu_slot_images_match_primary_contract(self):
-        for version in ("1.8.0", "2.1.0"):
+        for version in ("1.8.0", "2.3.0"):
             for suffix in ("001", "002", "003"):
                 for slot in ("a", "b"):
                     path = (
@@ -39,7 +39,7 @@ class Stm32CompatibilityTests(unittest.TestCase):
                         self.assertIn(f"stm32-led-{suffix}".encode(), image)
                         self.assertIn(version.encode(), image)
 
-                        if version == "2.1.0":
+                        if version == "2.3.0":
                             self.assertIn(b"VDD_MV=", image)
                             self.assertIn(b"TEMP_MC=", image)
                             self.assertIn(b"APP_FREE=", image)

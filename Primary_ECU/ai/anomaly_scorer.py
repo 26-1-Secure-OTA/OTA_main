@@ -138,9 +138,4 @@ def schedule_allow_ecus(
         model_mode=requested_mode,
         apply_mode=apply_mode,
     ).to_dict()
-    if (
-        requested_mode in {"ACTIVE", "SHADOW"}
-        and result["used_mode"] == "STATISTICAL"
-    ):
-        result["used_mode"] = requested_mode
     return result
