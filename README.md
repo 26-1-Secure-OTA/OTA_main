@@ -171,6 +171,28 @@ Prime ECU 실행과 동시에 다운로드가 진행되며, Prime ECU에서 전�
 
 ## STM32 A/B 슬롯 펌웨어 배포
 
+### AI 기반 업데이트 순서 설정
+
+Safety Policy에서 `ALLOW`된 ECU의 업데이트 순서는 기본적으로 기존
+Median/MAD 통계 방식이 결정합니다. 학습된 Isolation Forest를 실제 실행
+경로에 연결하되 순서에는 아직 반영하지 않으려면 다음처럼 SHADOW 모드로
+실행합니다.
+
+```bash
+cd Primary_ECU
+export OTA_AI_MODE=ISOLATION_FOREST
+export OTA_AI_APPLY_MODE=SHADOW
+python3 Primary.py
+```
+
+검증 후 추천 순서를 실제 업데이트 순서에 적용하려면
+`OTA_AI_APPLY_MODE=ACTIVE`를 사용합니다. 모델 파일은 기본적으로
+`Primary_ECU/models/isolation-forest-v1.joblib`, 메타데이터는
+`Primary_ECU/models/isolation-forest-v1.metadata.json`에서 읽습니다.
+다른 artifact를 사용할 때는 각각 `OTA_AI_MODEL_PATH`와
+`OTA_AI_METADATA_PATH`로 지정할 수 있습니다. 모델 로딩 또는 추론에
+실패하면 통계 방식으로, 통계 방식도 실패하면 고정 순서로 fallback합니다.
+
 STM32 펌웨어를 배포할 때는 동일한 소스와 동일한 버전으로 빌드한
 A/B 바이너리 두 개가 모두 필요합니다. 두 바이너리는 링커 시작 주소와
 벡터 테이블 위치만 다릅니다.
@@ -195,6 +217,39 @@ Director는 동일한 버전의 A/B 파일이 모두 준비된 경우에만 해�
 5. 메타데이터 슬롯, 파일명 슬롯, 바이너리의 Reset_Handler 주소를 교차검증합니다.
 6. 펌웨어 전송 직전에 Secondary 상태를 다시 확인하고, 슬롯이 변경되었으면 설치를 중단합니다.
 7. 펌웨어를 전송한 후 대상 슬롯이 활성 슬롯으로 변경되었는지 확인합니다.
+
+STM32는 `STATUS_REQ`에 다음 필드를 한 줄로 응답해야 합니다.
+
+```text
+STATUS,stm32-led-001,UID=12345678ABCDEF0011223344,VER=1.0.1,ACTIVE=A,TARGET=B,READY=1,MAX=49152,UPTIME_MS=125340,RESET=POWER_ON,UART_ERR=0,HEALTH=OK
+```
+
+`UID`는 STM32의 96비트 UID를 24자리 16진수로 표현한 값이며, `VER`는
+`x.y.z` 형식이어야 합니다. `RESET`은 `POWER_ON`, `PIN_RESET`, `SOFTWARE`,
+`WATCHDOG`, `UNKNOWN` 중 하나이고, `HEALTH`는 `OK`, `WARN`, `ERROR` 중
+하나여야 합니다. 정상적인 UART 수신 timeout은 `UART_ERR`에 포함하지 않습니다.
+
+처음 연결한 뒤 `Primary_ECU` 디렉터리에서 아래 명령으로 각 보드의 UID를
+확인합니다.
+
+```bash
+python status_check.py
+```
+
+실제 STM32Cube 워크스페이스에서 빌드한 ECU별 A/B 바이너리와 Primary의
+슬롯 판별·STATUS 계약 호환성을 검증하려면 저장소 루트에서 실행합니다.
+
+```bash
+python3 -m unittest discover -s STM32_Workspace/tests -v
+```
+
+이 테스트는 여섯 바이너리의 Cortex-M 벡터가 선언된 A/B 슬롯에 링크됐는지,
+ECU ID와 `1.8.0` 버전이 실제 바이너리에 포함됐는지, 보드 STATUS 응답을
+Primary가 정상 파싱하는지 검사합니다.
+
+출력된 UID를 `Primary_ECU/config/secondary_registry.json`의 동일한 ECU 항목에
+등록해야 합니다. UID가 `null`인 Secondary는 안전 정책에서
+`UNKNOWN_SECONDARY`로 차단됩니다.
 
 예를 들어 Secondary가 `ACTIVE=A,TARGET=B`를 보고하면 Primary는
 `stm32-led-001_<version>_slot_b.bin` 파일만 요청합니다. A/B 파일 중 하나만

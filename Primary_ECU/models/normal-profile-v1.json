@@ -1,0 +1,147 @@
+{
+  "boards": {
+    "stm32-led-001": {
+      "features": {
+        "app_flash_free_ratio": {
+          "center": 0.764160156,
+          "mad": 0.0,
+          "maximum": 0.764160156,
+          "minimum": 0.764160156,
+          "minimum_scale": 0.005,
+          "scale": 0.005
+        },
+        "link_response_ms": {
+          "center": 24.637,
+          "mad": 0.079,
+          "maximum": 24.914,
+          "minimum": 24.479,
+          "minimum_scale": 0.25,
+          "scale": 0.25
+        },
+        "supply_voltage_mv": {
+          "center": 3302.0,
+          "mad": 0.0,
+          "maximum": 3302.0,
+          "minimum": 3302.0,
+          "minimum_scale": 2.0,
+          "scale": 2.0
+        },
+        "temperature_c": {
+          "center": 38.956,
+          "mad": 0.0,
+          "maximum": 39.331,
+          "minimum": 38.769,
+          "minimum_scale": 0.25,
+          "scale": 0.25
+        }
+      },
+      "sample_count": 30,
+      "sessions": [
+        "NORMAL_BASELINE-20260820T064933Z-C4952904"
+      ],
+      "uid": "066CFF373956513043062025",
+      "versions": [
+        "2.1.1"
+      ]
+    },
+    "stm32-led-002": {
+      "features": {
+        "app_flash_free_ratio": {
+          "center": 0.764160156,
+          "mad": 0.0,
+          "maximum": 0.764160156,
+          "minimum": 0.764160156,
+          "minimum_scale": 0.005,
+          "scale": 0.005
+        },
+        "link_response_ms": {
+          "center": 24.5645,
+          "mad": 0.1025,
+          "maximum": 24.893,
+          "minimum": 24.403,
+          "minimum_scale": 0.25,
+          "scale": 0.25
+        },
+        "supply_voltage_mv": {
+          "center": 3295.0,
+          "mad": 0.0,
+          "maximum": 3295.0,
+          "minimum": 3293.0,
+          "minimum_scale": 2.0,
+          "scale": 2.0
+        },
+        "temperature_c": {
+          "center": 39.637,
+          "mad": 0.187,
+          "maximum": 40.011,
+          "minimum": 39.444,
+          "minimum_scale": 0.25,
+          "scale": 0.2772462
+        }
+      },
+      "sample_count": 30,
+      "sessions": [
+        "NORMAL_BASELINE-20260820T064933Z-C4952904"
+      ],
+      "uid": "066BFF373956513043084228",
+      "versions": [
+        "2.1.1"
+      ]
+    },
+    "stm32-led-003": {
+      "features": {
+        "app_flash_free_ratio": {
+          "center": 0.764160156,
+          "mad": 0.0,
+          "maximum": 0.764160156,
+          "minimum": 0.764160156,
+          "minimum_scale": 0.005,
+          "scale": 0.005
+        },
+        "link_response_ms": {
+          "center": 24.5625,
+          "mad": 0.0865,
+          "maximum": 24.821,
+          "minimum": 24.342,
+          "minimum_scale": 0.25,
+          "scale": 0.25
+        },
+        "supply_voltage_mv": {
+          "center": 3291.0,
+          "mad": 0.0,
+          "maximum": 3293.0,
+          "minimum": 3291.0,
+          "minimum_scale": 2.0,
+          "scale": 2.0
+        },
+        "temperature_c": {
+          "center": 39.173,
+          "mad": 0.2805,
+          "maximum": 41.139,
+          "minimum": 38.709,
+          "minimum_scale": 0.25,
+          "scale": 0.4158693
+        }
+      },
+      "sample_count": 30,
+      "sessions": [
+        "NORMAL_BASELINE-20260820T064933Z-C4952904"
+      ],
+      "uid": "0670FF373956513043092237",
+      "versions": [
+        "2.1.1"
+      ]
+    }
+  },
+  "feature_names": [
+    "link_response_ms",
+    "supply_voltage_mv",
+    "temperature_c",
+    "app_flash_free_ratio"
+  ],
+  "generated_at": "2026-08-20T07:08:06.755576+00:00",
+  "minimum_samples_per_board": 20,
+  "profile_schema_version": 1,
+  "profile_version": "normal-profile-v1",
+  "source_sha256": "3327d2e89b600033762395d368ab7c8d131f4595ff8288a57660ba6282eb1e1f"
+}

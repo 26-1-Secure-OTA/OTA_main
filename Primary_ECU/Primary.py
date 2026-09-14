@@ -17,11 +17,7 @@ from ecu import (
 )
 
 
-<<<<<<< HEAD
-BROKER = "172.20.10.2"
-=======
 BROKER = "172.20.10.7"
->>>>>>> a266665 (Update three STM32 OTA configuration)
 PORT = 8883
 
 TOPIC_NOTIFY_VERSION = "primary/version"
@@ -61,7 +57,10 @@ class PrimeEcuHandler:
         self.transport = Transport()
         self.verifier = Verifier()
         self.installer = Installer(self.storage)
-        self.reporter = Reporter(self.client, TOPIC_REPORT)
+        self.reporter = Reporter(
+            self.client,
+            TOPIC_REPORT,
+        )
 
         self.updater = Updater(
             self.storage,
@@ -77,27 +76,47 @@ class PrimeEcuHandler:
             "targets": None,
         }
 
-        # 중복 Director metadata로 인한 중복 요청 방지
+        # 중복 Director metadata로 인한
+        # 중복 요청 방지
         self.update_request_sent = False
 
-        # 중복 Image metadata로 인한 중복 설치 방지
+        # 중복 Image metadata로 인한
+        # 중복 설치 방지
         self.image_update_started = False
 
-        self.client.connect(broker, port, 60)
+        self.client.connect(
+            broker,
+            port,
+            60,
+        )
+
         self.client.loop_start()
 
         # VVM 전송
-        with open("./vvm.json", "r", encoding="utf-8") as f:
+        with open(
+            "./vvm.json",
+            "r",
+            encoding="utf-8",
+        ) as f:
             vvm = json.load(f)
 
         self.client.publish(
             TOPIC_NOTIFY_VERSION,
-            json.dumps(vvm, ensure_ascii=False).encode("utf-8"),
+            json.dumps(
+                vvm,
+                ensure_ascii=False,
+            ).encode("utf-8"),
             qos=0,
         )
 
-    def _save_update_target(self, targets_meta: dict) -> None:
-        os.makedirs("./meta", exist_ok=True)
+    def _save_update_target(
+        self,
+        targets_meta: dict,
+    ) -> None:
+        os.makedirs(
+            "./meta",
+            exist_ok=True,
+        )
 
         with open(
             "./meta/update_target.json",
@@ -111,7 +130,10 @@ class PrimeEcuHandler:
                 ensure_ascii=False,
             )
 
-        print("[Prime ECU] saved ./meta/update_target.json")
+        print(
+            "[Prime ECU] "
+            "saved ./meta/update_target.json"
+        )
 
     def _configure_tls(
         self,
@@ -137,63 +159,114 @@ class PrimeEcuHandler:
         rc,
         properties=None,
     ):
-        print(f"[Prime ECU] Connected: {rc}")
+        print(
+            f"[Prime ECU] Connected: {rc}"
+        )
 
-        client.subscribe(TOPIC_DIRECTOR_TIMESTAMP, qos=1)
-        client.subscribe(TOPIC_DIRECTOR_SNAPSHOT, qos=1)
-        client.subscribe(TOPIC_DIRECTOR_TARGETS, qos=1)
-        client.subscribe(TOPIC_IMAGE_META, qos=1)
+        client.subscribe(
+            TOPIC_DIRECTOR_TIMESTAMP,
+            qos=1,
+        )
 
-    def on_message(self, client, userdata, msg):
+        client.subscribe(
+            TOPIC_DIRECTOR_SNAPSHOT,
+            qos=1,
+        )
+
+        client.subscribe(
+            TOPIC_DIRECTOR_TARGETS,
+            qos=1,
+        )
+
+        client.subscribe(
+            TOPIC_IMAGE_META,
+            qos=1,
+        )
+
+    def on_message(
+        self,
+        client,
+        userdata,
+        msg,
+    ):
         # ==============================================================
         # Image Repository metadata 수신
         # ==============================================================
         if msg.topic == TOPIC_IMAGE_META:
-            # 같은 Image metadata가 다시 들어오면 설치 재시도 방지
+            # 같은 Image metadata가 다시 들어오면
+            # 설치 재시도 방지
             if self.image_update_started:
                 print(
-                    "[Prime ECU] duplicate image metadata ignored"
+                    "[Prime ECU] "
+                    "duplicate image metadata ignored"
                 )
                 return
 
             try:
                 timestamp_meta = json.loads(
-                    msg.payload.decode("utf-8")
+                    msg.payload.decode(
+                        "utf-8"
+                    )
                 )
+
             except Exception as e:
                 print(
-                    f"[Prime ECU] invalid JSON on "
+                    "[Prime ECU] "
+                    f"invalid JSON on "
                     f"{msg.topic}: {e}"
                 )
                 return
 
-            # JSON 검증이 끝난 다음 처리 시작 상태로 변경
+            # JSON 검증이 끝난 다음
+            # 처리 시작 상태로 변경
             self.image_update_started = True
 
-            print("[Prime ECU] received image metadata\n")
+            print(
+                "[Prime ECU] "
+                "received image metadata\n"
+            )
 
             try:
-                base_url = timestamp_meta["url"]
-
-                # Timestamp metadata 검증
-                ok, snapshot_hash = (
-                    self.verifier.verify_metadata(timestamp_meta)
+                base_url = (
+                    timestamp_meta["url"]
                 )
 
-                if not ok or snapshot_hash is None:
-                    print(
-                        "[FAIL] Timestamp metadata is not correct"
+                # ------------------------------------------------------
+                # Timestamp metadata 검증
+                # ------------------------------------------------------
+                ok, snapshot_hash = (
+                    self.verifier
+                    .verify_metadata(
+                        timestamp_meta
                     )
+                )
+
+                if (
+                    not ok
+                    or snapshot_hash is None
+                ):
+                    print(
+                        "[FAIL] "
+                        "Timestamp metadata "
+                        "is not correct"
+                    )
+
+                    # Metadata 검증 실패는
+                    # 기존처럼 즉시 중단
                     return
 
+                # ------------------------------------------------------
                 # Snapshot metadata 다운로드
+                # ------------------------------------------------------
                 snapshot_url = urljoin(
-                    base_url.rstrip("/") + "/",
+                    base_url.rstrip("/")
+                    + "/",
                     "meta/snapshot.json",
                 )
 
                 print(
-                    f"Downloading manifests from {snapshot_url}"
+                    "Downloading manifests "
+                    f"from {snapshot_url}"
                 )
 
                 response = requests.get(
@@ -201,38 +274,62 @@ class PrimeEcuHandler:
                     verify=False,
                     timeout=30,
                 )
+
                 response.raise_for_status()
 
-                raw_snapshot_bytes = response.content
-                snapshot_meta = response.json()
+                raw_snapshot_bytes = (
+                    response.content
+                )
+
+                snapshot_meta = (
+                    response.json()
+                )
 
                 print(
-                    "[Prime ECU] received Snapshot metadata\n"
+                    "[Prime ECU] "
+                    "received Snapshot metadata\n"
                 )
 
+                # ------------------------------------------------------
                 # Snapshot metadata 검증
+                # ------------------------------------------------------
                 ok, target_version = (
-                    self.verifier.verify_metadata(
+                    self.verifier
+                    .verify_metadata(
                         snapshot_meta,
                         snapshot_hash,
-                        snapshot_raw=raw_snapshot_bytes,
+                        snapshot_raw=(
+                            raw_snapshot_bytes
+                        ),
                     )
                 )
 
-                if not ok or target_version is None:
+                if (
+                    not ok
+                    or target_version is None
+                ):
                     print(
-                        "[FAIL] Snapshot metadata is not correct"
+                        "[FAIL] "
+                        "Snapshot metadata "
+                        "is not correct"
                     )
+
+                    # Metadata 검증 실패는
+                    # 기존처럼 즉시 중단
                     return
 
+                # ------------------------------------------------------
                 # Targets metadata 다운로드
+                # ------------------------------------------------------
                 targets_url = urljoin(
-                    base_url.rstrip("/") + "/",
+                    base_url.rstrip("/")
+                    + "/",
                     "meta/targets.json",
                 )
 
                 print(
-                    f"Downloading manifests from {targets_url}"
+                    "Downloading manifests "
+                    f"from {targets_url}"
                 )
 
                 response = requests.get(
@@ -240,107 +337,183 @@ class PrimeEcuHandler:
                     verify=False,
                     timeout=30,
                 )
+
                 response.raise_for_status()
 
-                targets_meta = response.json()
-
-                print(
-                    "[Prime ECU] received Target metadata\n"
+                targets_meta = (
+                    response.json()
                 )
 
+                print(
+                    "[Prime ECU] "
+                    "received Target metadata\n"
+                )
+
+                # ------------------------------------------------------
                 # Targets metadata 검증
-                ok, targets = self.verifier.verify_metadata(
-                    targets_meta,
-                    target_version,
+                # ------------------------------------------------------
+                ok, targets = (
+                    self.verifier
+                    .verify_metadata(
+                        targets_meta,
+                        target_version,
+                    )
                 )
 
                 if not ok:
                     print(
-                        "[FAIL] Targets metadata is not correct"
+                        "[FAIL] "
+                        "Targets metadata "
+                        "is not correct"
                     )
+
+                    # Metadata 검증 실패는
+                    # 기존처럼 즉시 중단
                     return
 
                 print(
-                    "[OK] All metadata verified successfully"
+                    "[OK] "
+                    "All metadata "
+                    "verified successfully"
                 )
+
                 print(targets)
 
-                # Director와 Image Repository target 해시 교차 검증
-                update_images = self.verifier.hash_check(
-                    "./meta/update_target.json",
-                    targets,
+                # ------------------------------------------------------
+                # Director / Image Target 교차 검증
+                # ------------------------------------------------------
+                update_images = (
+                    self.verifier.hash_check(
+                        "./meta/"
+                        "update_target.json",
+                        targets,
+                    )
                 )
 
                 if not update_images:
-                    print("[FAIL] Hash Check is failed")
+                    print(
+                        "[FAIL] "
+                        "Hash Check is failed"
+                    )
 
                     self.reporter.report(
                         "hash_check_failed",
                         {
                             "reason": (
-                                "Director target and Image target "
+                                "Director target "
+                                "and Image target "
                                 "hash mismatch"
                             )
                         },
                     )
+
+                    # 전체 Target 교차 검증 실패는
+                    # 기존처럼 즉시 중단
                     return
 
                 print(
                     "[Primary ECU] "
-                    "Download verified ECU artifacts"
+                    "Download verified "
+                    "ECU artifacts"
                 )
 
+                # ------------------------------------------------------
+                # Secondary STATUS 기반 Target 선택
+                # ------------------------------------------------------
                 try:
-                    selection = self.installer.select_updates_for_secondary(
-                        update_images
+                    selection = (
+                        self.installer
+                        .select_updates_for_secondary(
+                            update_images
+                        )
                     )
+
                 except Exception as exc:
-                    print(f"[FAIL] Secondary target selection failed: {exc}")
+                    print(
+                        "[FAIL] Secondary target "
+                        "selection failed: "
+                        f"{exc}"
+                    )
+
                     self.reporter.report(
                         "secondary_target_selection_failed",
-                        {"reason": str(exc)},
+                        {
+                            "reason": str(exc)
+                        },
                     )
+
                     return
 
-                artifact_updates = selection["updates"]
-                secondary_statuses = selection["secondary_statuses"]
+                artifact_updates = (
+                    selection["updates"]
+                )
+
+                secondary_statuses = (
+                    selection[
+                        "secondary_statuses"
+                    ]
+                )
 
                 if not artifact_updates:
                     print(
-                        "[Primary ECU] No ECU update target"
+                        "[Primary ECU] "
+                        "No ECU update target"
                     )
 
                     self.reporter.report(
                         "artifact_download_skipped",
                         {
-                            "reason": "no ECU update target"
+                            "reason": (
+                                "no ECU update target"
+                            )
                         },
                     )
+
                     return
 
-                # 펌웨어 파일 다운로드 및 해시 검증
+                # ------------------------------------------------------
+                # Artifact 다운로드 및 해시 검증
+                # ------------------------------------------------------
                 download_result = (
-                    self.installer.download_artifacts(
+                    self.installer
+                    .download_artifacts(
                         artifact_updates,
                         base_url,
                     )
                 )
 
+                # 개별 Artifact 실패가 있어도
+                # 전체 설치를 여기서 중단하지 않는다.
                 if not download_result["ok"]:
                     self.reporter.report(
                         "artifact_download_failed",
                         download_result,
                     )
-                    return
 
-                self.reporter.report(
-                    "artifact_download_ok",
-                    download_result,
-                )
+                    print(
+                        "[Primary ECU] "
+                        "Some artifacts failed "
+                        "verification. "
+                        "Continue with per-ECU policy."
+                    )
 
-                # 001 → 002 → 003 고정 순서 설치
+                else:
+                    self.reporter.report(
+                        "artifact_download_ok",
+                        download_result,
+                    )
+
+                # ------------------------------------------------------
+                # 001 -> 002 -> 003 고정 순서 설치
+                #
+                # 다운로드 실패 ECU도 downloaded_results에
+                # ecu_serial이 남아 있으므로
+                # install_serial_firmware() 내부 정책에서
+                # BLOCK 처리할 수 있다.
+                # ------------------------------------------------------
                 install_result = (
-                    self.installer.install_serial_firmware(
+                    self.installer
+                    .install_serial_firmware(
                         download_result["results"],
                         expected_secondary_statuses=(
                             secondary_statuses
@@ -348,11 +521,13 @@ class PrimeEcuHandler:
                     )
                 )
 
-                if install_result.get("skipped"):
+                if install_result.get(
+                    "skipped"
+                ):
                     print(
                         "[Primary ECU] "
-                        "Serial firmware install skipped: "
-                        f"{install_result.get('reason')}"
+                        "Serial firmware "
+                        "install skipped"
                     )
 
                     self.reporter.report(
@@ -363,7 +538,8 @@ class PrimeEcuHandler:
                 elif install_result["ok"]:
                     print(
                         "[Primary ECU] "
-                        "Serial firmware install succeeded"
+                        "Serial firmware "
+                        "install succeeded"
                     )
 
                     self.reporter.report(
@@ -374,7 +550,8 @@ class PrimeEcuHandler:
                 else:
                     print(
                         "[Primary ECU] "
-                        "Serial firmware install failed"
+                        "Serial firmware "
+                        "install failed"
                     )
 
                     self.reporter.report(
@@ -384,8 +561,9 @@ class PrimeEcuHandler:
 
             except Exception as e:
                 print(
-                    "[FAIL] Image update processing failed: "
-                    f"{e}"
+                    "[FAIL] "
+                    "Image update processing "
+                    f"failed: {e}"
                 )
 
                 self.reporter.report(
@@ -401,35 +579,56 @@ class PrimeEcuHandler:
         # Director Repository metadata 수신
         # ==============================================================
         try:
-            meta = json.loads(msg.payload.decode("utf-8"))
+            meta = json.loads(
+                msg.payload.decode(
+                    "utf-8"
+                )
+            )
+
         except Exception as e:
             print(
-                f"[Prime ECU] invalid JSON on "
+                "[Prime ECU] "
+                f"invalid JSON on "
                 f"{msg.topic}: {e}"
             )
             return
 
         role = None
 
-        if msg.topic == TOPIC_DIRECTOR_TIMESTAMP:
+        if (
+            msg.topic
+            == TOPIC_DIRECTOR_TIMESTAMP
+        ):
             role = "timestamp"
+
             print(
                 "[Prime ECU] "
-                "received Director Timestamp metadata\n"
+                "received Director "
+                "Timestamp metadata\n"
             )
 
-        elif msg.topic == TOPIC_DIRECTOR_SNAPSHOT:
+        elif (
+            msg.topic
+            == TOPIC_DIRECTOR_SNAPSHOT
+        ):
             role = "snapshot"
+
             print(
                 "[Prime ECU] "
-                "received Director Snapshot metadata\n"
+                "received Director "
+                "Snapshot metadata\n"
             )
 
-        elif msg.topic == TOPIC_DIRECTOR_TARGETS:
+        elif (
+            msg.topic
+            == TOPIC_DIRECTOR_TARGETS
+        ):
             role = "targets"
+
             print(
                 "[Prime ECU] "
-                "received Director Targets metadata\n"
+                "received Director "
+                "Targets metadata\n"
             )
 
         if role is None:
@@ -438,11 +637,13 @@ class PrimeEcuHandler:
         self.meta_buffer[role] = meta
 
         print(
-            f"[Prime ECU] received {role} metadata"
+            f"[Prime ECU] "
+            f"received {role} metadata"
         )
 
         if all(
-            self.meta_buffer[item] is not None
+            self.meta_buffer[item]
+            is not None
             for item in (
                 "timestamp",
                 "snapshot",
@@ -451,10 +652,26 @@ class PrimeEcuHandler:
         ):
             self._on_all_director_meta_received()
 
-    def _on_all_director_meta_received(self):
-        timestamp_meta = self.meta_buffer["timestamp"]
-        snapshot_meta = self.meta_buffer["snapshot"]
-        targets_meta = self.meta_buffer["targets"]
+    def _on_all_director_meta_received(
+        self,
+    ):
+        timestamp_meta = (
+            self.meta_buffer[
+                "timestamp"
+            ]
+        )
+
+        snapshot_meta = (
+            self.meta_buffer[
+                "snapshot"
+            ]
+        )
+
+        targets_meta = (
+            self.meta_buffer[
+                "targets"
+            ]
+        )
 
         print(
             "[Prime ECU] "
@@ -463,7 +680,8 @@ class PrimeEcuHandler:
         )
 
         verify_result = (
-            self.verifier.verify_director_chain(
+            self.verifier
+            .verify_director_chain(
                 timestamp_meta,
                 snapshot_meta,
                 targets_meta,
@@ -473,7 +691,8 @@ class PrimeEcuHandler:
         if not verify_result.ok:
             print(
                 "[Prime ECU] "
-                "director metadata verify FAILED: "
+                "director metadata "
+                "verify FAILED: "
                 f"{verify_result.reason}"
             )
 
@@ -481,33 +700,41 @@ class PrimeEcuHandler:
                 self.reporter.report(
                     "director_meta_verify_failed",
                     {
-                        "reason": verify_result.reason
+                        "reason": (
+                            verify_result.reason
+                        )
                     },
                 )
+
             except Exception as e:
                 print(
-                    f"[Prime ECU] report failed: {e}"
+                    "[Prime ECU] "
+                    f"report failed: {e}"
                 )
 
         else:
             print(
-                "[Prime ECU] director metadata verify OK"
+                "[Prime ECU] "
+                "director metadata verify OK"
             )
 
             # 이미 한 번 업데이트 요청을 보냈으면
-            # 중복된 Director metadata는 무시한다.
+            # 중복된 Director metadata는 무시
             if self.update_request_sent:
                 print(
                     "[Prime ECU] "
-                    "duplicate Director metadata ignored"
+                    "duplicate Director "
+                    "metadata ignored"
                 )
 
             else:
                 # publish 전에 먼저 True로 변경하여
-                # 재진입 또는 중복 콜백을 방지한다.
+                # 재진입 또는 중복 콜백 방지
                 self.update_request_sent = True
 
-                self._save_update_target(targets_meta)
+                self._save_update_target(
+                    targets_meta
+                )
 
                 try:
                     self.reporter.report(
@@ -515,12 +742,15 @@ class PrimeEcuHandler:
                         {},
                         request_next=True,
                     )
+
                 except Exception as e:
                     print(
-                        f"[Prime ECU] report failed: {e}"
+                        "[Prime ECU] "
+                        f"report failed: {e}"
                     )
 
-        # 다음 metadata 묶음 수신을 위해 버퍼 초기화
+        # 다음 metadata 묶음 수신을 위해
+        # 버퍼 초기화
         self.meta_buffer = {
             key: None
             for key in self.meta_buffer
@@ -528,7 +758,10 @@ class PrimeEcuHandler:
 
 
 if __name__ == "__main__":
-    handler = PrimeEcuHandler(BROKER, PORT)
+    handler = PrimeEcuHandler(
+        BROKER,
+        PORT,
+    )
 
     try:
         while True:
@@ -536,4 +769,7 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         handler.client.loop_stop()
-        print("[Prime ECU] stopped")
+
+        print(
+            "[Prime ECU] stopped"
+        )
